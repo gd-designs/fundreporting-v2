@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { Suspense, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -19,7 +19,7 @@ const schema = z.object({
 
 type SignupValues = z.infer<typeof schema>
 
-export default function SignupPage() {
+function SignupForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [serverError, setServerError] = useState<string | null>(null)
@@ -50,57 +50,65 @@ export default function SignupPage() {
   }
 
   return (
+    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
+      <Field>
+        <FieldLabel htmlFor="name">Full name</FieldLabel>
+        <Input
+          id="name"
+          type="text"
+          autoComplete="name"
+          placeholder="Jane Smith"
+          {...register('name')}
+        />
+        {errors.name && <FieldError>{errors.name.message}</FieldError>}
+      </Field>
+
+      <Field>
+        <FieldLabel htmlFor="email">Email</FieldLabel>
+        <Input
+          id="email"
+          type="email"
+          autoComplete="email"
+          placeholder="you@example.com"
+          {...register('email')}
+        />
+        {errors.email && <FieldError>{errors.email.message}</FieldError>}
+      </Field>
+
+      <Field>
+        <FieldLabel htmlFor="password">Password</FieldLabel>
+        <Input
+          id="password"
+          type="password"
+          autoComplete="new-password"
+          placeholder="Min. 8 characters"
+          {...register('password')}
+        />
+        {errors.password && <FieldError>{errors.password.message}</FieldError>}
+      </Field>
+
+      {serverError && (
+        <p className="text-sm text-destructive">{serverError}</p>
+      )}
+
+      <Button type="submit" className="w-full" disabled={isSubmitting}>
+        {isSubmitting ? 'Creating account...' : 'Create account'}
+      </Button>
+    </form>
+  )
+}
+
+export default function SignupPage() {
+  return (
     <Card>
       <CardHeader>
         <CardTitle>Create account</CardTitle>
         <CardDescription>Get started with FundReporting</CardDescription>
       </CardHeader>
       <CardContent>
-        <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
-          <Field>
-            <FieldLabel htmlFor="name">Full name</FieldLabel>
-            <Input
-              id="name"
-              type="text"
-              autoComplete="name"
-              placeholder="Jane Smith"
-              {...register('name')}
-            />
-            {errors.name && <FieldError>{errors.name.message}</FieldError>}
-          </Field>
-
-          <Field>
-            <FieldLabel htmlFor="email">Email</FieldLabel>
-            <Input
-              id="email"
-              type="email"
-              autoComplete="email"
-              placeholder="you@example.com"
-              {...register('email')}
-            />
-            {errors.email && <FieldError>{errors.email.message}</FieldError>}
-          </Field>
-
-          <Field>
-            <FieldLabel htmlFor="password">Password</FieldLabel>
-            <Input
-              id="password"
-              type="password"
-              autoComplete="new-password"
-              placeholder="Min. 8 characters"
-              {...register('password')}
-            />
-            {errors.password && <FieldError>{errors.password.message}</FieldError>}
-          </Field>
-
-          {serverError && (
-            <p className="text-sm text-destructive">{serverError}</p>
-          )}
-
-          <Button type="submit" className="w-full" disabled={isSubmitting}>
-            {isSubmitting ? 'Creating account...' : 'Create account'}
-          </Button>
-        </form>
+        <Suspense fallback={<div className="flex flex-col gap-4 animate-pulse"><div className="h-10 bg-muted rounded" /><div className="h-10 bg-muted rounded" /><div className="h-10 bg-muted rounded" /></div>}>
+          <SignupForm />
+        </Suspense>
       </CardContent>
       <CardFooter className="justify-center text-sm text-muted-foreground">
         Already have an account?&nbsp;

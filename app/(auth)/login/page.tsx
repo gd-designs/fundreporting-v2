@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { Suspense, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -18,7 +18,7 @@ const schema = z.object({
 
 type LoginValues = z.infer<typeof schema>
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [serverError, setServerError] = useState<string | null>(null)
@@ -49,45 +49,53 @@ export default function LoginPage() {
   }
 
   return (
+    <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
+      <Field>
+        <FieldLabel htmlFor="email">Email</FieldLabel>
+        <Input
+          id="email"
+          type="email"
+          autoComplete="email"
+          placeholder="you@example.com"
+          {...register('email')}
+        />
+        {errors.email && <FieldError>{errors.email.message}</FieldError>}
+      </Field>
+
+      <Field>
+        <FieldLabel htmlFor="password">Password</FieldLabel>
+        <Input
+          id="password"
+          type="password"
+          autoComplete="current-password"
+          placeholder="••••••••"
+          {...register('password')}
+        />
+        {errors.password && <FieldError>{errors.password.message}</FieldError>}
+      </Field>
+
+      {serverError && (
+        <p className="text-sm text-destructive">{serverError}</p>
+      )}
+
+      <Button type="submit" className="w-full" disabled={isSubmitting}>
+        {isSubmitting ? 'Signing in...' : 'Sign in'}
+      </Button>
+    </form>
+  )
+}
+
+export default function LoginPage() {
+  return (
     <Card>
       <CardHeader>
         <CardTitle>Sign in</CardTitle>
         <CardDescription>Enter your credentials to continue</CardDescription>
       </CardHeader>
       <CardContent>
-        <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">
-          <Field>
-            <FieldLabel htmlFor="email">Email</FieldLabel>
-            <Input
-              id="email"
-              type="email"
-              autoComplete="email"
-              placeholder="you@example.com"
-              {...register('email')}
-            />
-            {errors.email && <FieldError>{errors.email.message}</FieldError>}
-          </Field>
-
-          <Field>
-            <FieldLabel htmlFor="password">Password</FieldLabel>
-            <Input
-              id="password"
-              type="password"
-              autoComplete="current-password"
-              placeholder="••••••••"
-              {...register('password')}
-            />
-            {errors.password && <FieldError>{errors.password.message}</FieldError>}
-          </Field>
-
-          {serverError && (
-            <p className="text-sm text-destructive">{serverError}</p>
-          )}
-
-          <Button type="submit" className="w-full" disabled={isSubmitting}>
-            {isSubmitting ? 'Signing in...' : 'Sign in'}
-          </Button>
-        </form>
+        <Suspense fallback={<div className="flex flex-col gap-4 animate-pulse"><div className="h-10 bg-muted rounded" /><div className="h-10 bg-muted rounded" /><div className="h-10 bg-muted rounded" /></div>}>
+          <LoginForm />
+        </Suspense>
       </CardContent>
       <CardFooter className="justify-center text-sm text-muted-foreground">
         No account?&nbsp;
