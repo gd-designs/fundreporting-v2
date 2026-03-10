@@ -1,0 +1,30 @@
+import { getAuthToken } from "@/lib/auth"
+import { type NextRequest, NextResponse } from "next/server"
+
+export async function GET(req: NextRequest) {
+  const token = await getAuthToken()
+  if (!token) return NextResponse.json({ message: "Unauthorized" }, { status: 401 })
+  const entityId = req.nextUrl.searchParams.get("entity")
+  const url = entityId
+    ? `${process.env.PLATFORM_API_URL}/sheet_item?entity=${encodeURIComponent(entityId)}`
+    : `${process.env.PLATFORM_API_URL}/sheet_item`
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" })
+  if (res.status === 404) return NextResponse.json({ items: [] })
+  const payload = await res.json() as unknown
+  if (!res.ok) return NextResponse.json({ message: "Failed to load sheet items." }, { status: 502 })
+  return NextResponse.json({ items: Array.isArray(payload) ? payload : [] })
+}
+
+export async function POST(req: NextRequest) {
+  const token = await getAuthToken()
+  if (!token) return NextResponse.json({ message: "Unauthorized" }, { status: 401 })
+  const body = await req.json() as Record<string, unknown>
+  const res = await fetch(`${process.env.PLATFORM_API_URL}/sheet_item`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  const payload = await res.json() as unknown
+  if (!res.ok) return NextResponse.json({ message: "Failed to create sheet item." }, { status: 502 })
+  return NextResponse.json(payload)
+}

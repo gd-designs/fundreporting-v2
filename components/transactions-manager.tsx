@@ -1,0 +1,241 @@
+"use client"
+
+import * as React from "react"
+import { ArrowDownLeft, ArrowUpRight, Plus, Trash2 } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import {
+  fetchEntityTransactions,
+  formatAmountWithCurrency,
+  formatTxDate,
+  type EntityTransaction,
+} from "@/lib/entity-transactions"
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+function typeColor(typeName: string): string {
+  const t = typeName.toLowerCase()
+  if (t === "buy" || t === "transfer in") return "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+  if (t === "sell" || t === "sale" || t === "transfer out") return "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300"
+  if (t.includes("income") || t.includes("dividend") || t.includes("distribution")) return "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
+  if (t.includes("expense") || t.includes("fee")) return "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300"
+  return "bg-muted text-muted-foreground"
+}
+
+function entryTypeBadgeColor(entryType: string): string {
+  const t = entryType.toLowerCase()
+  if (t === "cash") return "bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300"
+  if (t === "asset") return "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300"
+  if (t === "income") return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+  if (t === "expense" || t === "fee") return "bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300"
+  return "bg-muted text-muted-foreground"
+}
+
+function computeStats(transactions: EntityTransaction[]) {
+  let capitalIn = 0
+  let withdrawals = 0
+
+  for (const tx of transactions) {
+    const typeLower = tx.typeName.toLowerCase()
+    const isNewMoney = typeLower.includes("new money") || typeLower.includes("capital") || typeLower.includes("deposit")
+    const isWithdrawal = typeLower.includes("withdrawal") || typeLower.includes("withdraw") || typeLower.includes("distribution")
+
+    for (const leg of tx.legs) {
+      if (leg.entryType === "cash") {
+        if (isNewMoney && leg.direction === "in") capitalIn += leg.amount
+        else if (isWithdrawal && leg.direction === "out") withdrawals += leg.amount
+      }
+    }
+  }
+
+  return { capitalIn, withdrawals }
+}
+
+// ── Main component ───────────────────────────────────────────────────────────
+
+export function TransactionsManager({ entityUUID }: { entityUUID: string }) {
+  const [transactions, setTransactions] = React.useState<EntityTransaction[]>([])
+  const [loading, setLoading] = React.useState(true)
+  const [error, setError] = React.useState<string | null>(null)
+  const [deletingId, setDeletingId] = React.useState<string | null>(null)
+  const [confirmDeleteId, setConfirmDeleteId] = React.useState<string | null>(null)
+  const [expandedIds, setExpandedIds] = React.useState<Set<string>>(new Set())
+
+  const load = React.useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const txs = await fetchEntityTransactions(entityUUID)
+      txs.sort((a, b) => b.date - a.date)
+      setTransactions(txs)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load transactions.")
+    } finally {
+      setLoading(false)
+    }
+  }, [entityUUID])
+
+  React.useEffect(() => { void load() }, [load])
+
+  function toggleExpand(id: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+
+  async function deleteTransaction(id: string) {
+    setDeletingId(id)
+    try {
+      const res = await fetch(`/api/transactions/${id}`, { method: "DELETE" })
+      if (!res.ok) throw new Error("Failed to delete")
+      setTransactions((prev) => prev.filter((t) => t.id !== id))
+    } catch {
+      // keep
+    } finally {
+      setDeletingId(null)
+      setConfirmDeleteId(null)
+    }
+  }
+
+  const sorted = transactions
+  const stats = React.useMemo(() => computeStats(transactions), [transactions])
+
+  // Detect primary currency from first cash leg
+  const primaryCurrency = React.useMemo(() => {
+    for (const tx of transactions) {
+      for (const leg of tx.legs) {
+        if (leg.currencyCode) return leg.currencyCode
+      }
+    }
+    return null
+  }, [transactions])
+
+  return (
+    <div className="space-y-6">
+
+      {/* Stats bar */}
+      <div className="grid grid-cols-3 gap-4">
+        <div className="rounded-lg border p-4">
+          <p className="text-xs text-muted-foreground uppercase tracking-wide font-medium">Transactions</p>
+          <p className="text-2xl font-semibold mt-1">{loading ? "—" : transactions.length}</p>
+        </div>
+        <div className="rounded-lg border p-4">
+          <p className="text-xs text-muted-foreground uppercase tracking-wide font-medium">Capital In</p>
+          <p className={`text-2xl font-semibold mt-1 ${stats.capitalIn > 0 ? "text-emerald-600" : ""}`}>
+            {loading ? "—" : `+${formatAmountWithCurrency(stats.capitalIn, primaryCurrency)}`}
+          </p>
+        </div>
+        <div className="rounded-lg border p-4">
+          <p className="text-xs text-muted-foreground uppercase tracking-wide font-medium">Withdrawals</p>
+          <p className={`text-2xl font-semibold mt-1 ${stats.withdrawals > 0 ? "text-red-600" : ""}`}>
+            {loading ? "—" : `−${formatAmountWithCurrency(stats.withdrawals, primaryCurrency)}`}
+          </p>
+        </div>
+      </div>
+
+      {/* Transactions list */}
+      <div className="rounded-lg border">
+        <div className="flex items-center justify-between px-4 py-3 border-b">
+          <p className="font-semibold text-sm">All Transactions</p>
+          <Button size="sm" className="h-8 gap-1.5 text-xs">
+            <Plus className="size-3.5" />
+            Add transaction
+          </Button>
+        </div>
+
+        {loading && (
+          <div className="px-4 py-10 text-center text-sm text-muted-foreground">Loading…</div>
+        )}
+
+        {!loading && error && (
+          <div className="px-4 py-6 text-sm text-destructive">{error}</div>
+        )}
+
+        {!loading && !error && transactions.length === 0 && (
+          <div className="px-4 py-10 text-center text-sm text-muted-foreground">No transactions yet.</div>
+        )}
+
+        {!loading && sorted.map((tx) => {
+          const expanded = expandedIds.has(tx.id)
+          const isDeleting = deletingId === tx.id
+          const isConfirming = confirmDeleteId === tx.id
+
+          return (
+            <div key={tx.id} className="border-b last:border-b-0">
+              {/* Transaction header row */}
+              <div
+                className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-muted/30 transition-colors"
+                onClick={() => toggleExpand(tx.id)}
+              >
+                <span className={`shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${typeColor(tx.typeName)}`}>
+                  {tx.typeName || "—"}
+                </span>
+                <span className="text-sm font-medium truncate flex-1">
+                  {tx.reference || "—"}
+                </span>
+                <span className="text-xs text-muted-foreground shrink-0">
+                  {formatTxDate(tx.date)}
+                </span>
+
+                {isConfirming ? (
+                  <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      className="h-6 px-2 text-xs"
+                      disabled={isDeleting}
+                      onClick={() => deleteTransaction(tx.id)}
+                    >
+                      {isDeleting ? "…" : "Delete"}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 px-2 text-xs"
+                      onClick={() => setConfirmDeleteId(null)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <button
+                    className="shrink-0 text-muted-foreground hover:text-destructive transition-colors"
+                    onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(tx.id) }}
+                    title="Delete transaction"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Expanded legs */}
+              {expanded && (
+                <div className="px-4 pb-3 space-y-1.5">
+                  {tx.legs.map((leg) => (
+                    <div key={leg.id} className="flex items-center gap-2 text-xs">
+                      {leg.direction === "in" ? (
+                        <ArrowDownLeft className="size-3 shrink-0 text-emerald-600" />
+                      ) : (
+                        <ArrowUpRight className="size-3 shrink-0 text-red-500" />
+                      )}
+                      <span className="w-36 truncate text-sm">{leg.assetName || leg.objectName || "—"}</span>
+                      <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${entryTypeBadgeColor(leg.entryType)}`}>
+                        {leg.entryTypeLabel || leg.entryType || "—"}
+                      </span>
+                      <span className={`tabular-nums font-medium ${leg.direction === "in" ? "text-emerald-600" : "text-red-500"}`}>
+                        {leg.direction === "in" ? "+" : "−"}
+                        {formatAmountWithCurrency(leg.amount, leg.currencyCode)}
+                      </span>
+                      <span className="text-muted-foreground truncate">{leg.entityName || "—"}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
