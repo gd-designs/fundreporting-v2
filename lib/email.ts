@@ -1,6 +1,8 @@
 import { Resend } from "resend";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+function getResend() {
+  return new Resend(process.env.RESEND_API_KEY);
+}
 
 const FROM = process.env.RESEND_FROM_EMAIL ?? "noreply@fundreporting.com";
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "";
@@ -68,7 +70,7 @@ export async function sendCapitalCallEmail({
     ? new Date(dueDate).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
     : "a date to be confirmed";
 
-  return resend.emails.send({
+  return getResend().emails.send({
     from: FROM,
     to: toEmail,
     subject: `Capital call issued — ${entityName}`,
@@ -105,7 +107,7 @@ export async function sendShareholderInvite({
   const greeting = toName ? `Hello ${toName},` : "Hello,";
 
   if (isExistingUser) {
-    return resend.emails.send({
+    return getResend().emails.send({
       from: FROM,
       to: toEmail,
       subject: `You've been added as a shareholder — ${entityName}`,
@@ -128,7 +130,7 @@ export async function sendShareholderInvite({
     });
   } else {
     const signupUrl = `${APP_URL}/signup?email=${encodeURIComponent(toEmail)}`;
-    return resend.emails.send({
+    return getResend().emails.send({
       from: FROM,
       to: toEmail,
       subject: `You've been invited as a shareholder — ${entityName}`,
