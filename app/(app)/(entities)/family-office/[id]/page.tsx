@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation"
 import { getAuthToken } from "@/lib/auth"
+import { FamilyOfficeOverview } from "@/components/family-office-overview"
 
 async function getFamilyOffice(id: string) {
   const token = await getAuthToken()
@@ -9,7 +10,13 @@ async function getFamilyOffice(id: string) {
     cache: "no-store",
   })
   if (!res.ok) return null
-  return res.json()
+  return res.json() as Promise<{
+    id: string
+    entity: string
+    name: string | null
+    country: string | null
+    _country?: { id: number; name: string } | null
+  }>
 }
 
 export default async function FamilyOfficePage({
@@ -22,10 +29,11 @@ export default async function FamilyOfficePage({
   if (!familyOffice) notFound()
 
   return (
-    <div className="p-6 md:p-8">
-      <div className="mx-auto">
-        <p className="text-muted-foreground text-sm">Overview coming soon.</p>
-      </div>
-    </div>
+    <FamilyOfficeOverview
+      entityUUID={familyOffice.entity}
+      familyOfficeId={familyOffice.id}
+      familyOfficeName={familyOffice.name}
+      country={familyOffice._country?.name ?? null}
+    />
   )
 }

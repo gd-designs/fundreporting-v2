@@ -10,7 +10,15 @@ async function getCompany(id: string) {
     cache: "no-store",
   })
   if (!res.ok) return null
-  return res.json() as Promise<{ id: string; entity: string; name: string | null }>
+  return res.json() as Promise<{
+    id: string
+    entity: string
+    name: string | null
+    industry: string | null
+    country: string | null
+    _country?: { id: number; name: string } | null
+    registration_number: string | null
+  }>
 }
 
 export default async function CompanyPage({
@@ -27,6 +35,9 @@ export default async function CompanyPage({
       entityUUID={company.entity}
       companyId={company.id}
       companyName={company.name}
+      industry={company.industry}
+      country={company._country?.name ?? null}
+      registrationNumber={company.registration_number}
     />
   )
 }

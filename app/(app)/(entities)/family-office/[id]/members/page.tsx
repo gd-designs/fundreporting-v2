@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation"
 import { getAuthToken } from "@/lib/auth"
 import { getEntities } from "@/lib/entities"
-import { FamilyOfficeAssets } from "@/components/family-office-assets"
+import { FamilyOfficeMembers } from "@/components/family-office-members"
 
 async function getFamilyOffice(id: string) {
   const token = await getAuthToken()
@@ -11,15 +11,10 @@ async function getFamilyOffice(id: string) {
     cache: "no-store",
   })
   if (!res.ok) return null
-  return res.json() as Promise<{
-    id: string
-    entity: string
-    name: string | null
-    _currency?: { id: number; code: string } | null
-  }>
+  return res.json() as Promise<{ id: string; entity: string; name: string | null }>
 }
 
-export default async function FamilyOfficeAssetsPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function MembersPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   const [familyOffice, allEntities] = await Promise.all([
     getFamilyOffice(id),
@@ -28,13 +23,12 @@ export default async function FamilyOfficeAssetsPage({ params }: { params: Promi
   if (!familyOffice) notFound()
 
   const allPortfolios = allEntities.filter((e) => e.type === "portfolio")
-  const baseCurrency = familyOffice._currency?.code ?? "EUR"
 
   return (
-    <FamilyOfficeAssets
+    <FamilyOfficeMembers
       familyOfficeId={familyOffice.id}
+      familyOfficeName={familyOffice.name}
       allPortfolios={allPortfolios}
-      baseCurrency={baseCurrency}
     />
   )
 }

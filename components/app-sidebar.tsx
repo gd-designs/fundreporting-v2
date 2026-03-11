@@ -186,7 +186,7 @@ function EntityNav({
 }) {
   const pathname = usePathname()
   const base = `/${slug}/${id}`
-  const holdingsNav = entityType === "portfolio" ? HOLDINGS_NAV : HOLDINGS_WITH_CAP_NAV
+  const holdingsNav = (entityType === "portfolio" || entityType === "family_office") ? HOLDINGS_NAV : HOLDINGS_WITH_CAP_NAV
   const isOverview = pathname === base
 
   function isActive(href: string) {
@@ -255,6 +255,16 @@ function EntityNav({
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </>
+          )}
+          {entityType === "family_office" && (
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild tooltip="Members" isActive={isActive("/members")}>
+                <Link href={`${base}/members`}>
+                  <Users />
+                  <span>Members</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
           )}
         </SidebarMenu>
       </SidebarGroup>
@@ -372,10 +382,14 @@ function FundInAmNav({
 function NavLinks({ entities }: { entities: UnifiedEntity[] }) {
   const pathname = usePathname()
 
-  const [pinnedIds, setPinnedIds] = React.useState<string[]>(() => {
-    if (typeof window === "undefined") return []
-    try { return JSON.parse(localStorage.getItem(QUICK_ACCESS_KEY) ?? "[]") } catch { return [] }
-  })
+  const [pinnedIds, setPinnedIds] = React.useState<string[]>([])
+
+  React.useEffect(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem(QUICK_ACCESS_KEY) ?? "[]")
+      if (Array.isArray(stored)) setPinnedIds(stored)
+    } catch {}
+  }, [])
   const [showPicker, setShowPicker] = React.useState(false)
 
   function pin(id: string) {

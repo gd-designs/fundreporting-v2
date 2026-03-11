@@ -16,20 +16,16 @@ function getOutstanding(l: Liability, paidCount: number): number {
   return periods[Math.min(paidCount, l.term_length) - 1]?.closing ?? p
 }
 
-export function CompanyOverview({
+export function FamilyOfficeOverview({
   entityUUID,
-  companyId,
-  companyName,
-  industry,
+  familyOfficeId,
+  familyOfficeName,
   country,
-  registrationNumber,
 }: {
   entityUUID: string
-  companyId: string
-  companyName: string | null
-  industry?: string | null
+  familyOfficeId: string
+  familyOfficeName: string | null
   country?: string | null
-  registrationNumber?: string | null
 }) {
   const [assets, setAssets] = React.useState<EntityAsset[]>([])
   const [liabilities, setLiabilities] = React.useState<Liability[]>([])
@@ -101,7 +97,6 @@ export function CompanyOverview({
 
         setPaidMap(pm)
 
-        // Identify ticker assets
         const tickerByAsset = new Map<string, string>()
         for (const asset of assetList) {
           const ticker = asset.instrument?.ticker?.trim().toUpperCase()
@@ -110,7 +105,6 @@ export function CompanyOverview({
 
         const uniqueTickers = Array.from(new Set(tickerByAsset.values()))
 
-        // Fetch mutations and live quotes in parallel
         const [mutationsData, quotesMap] = await Promise.all([
           fetch(`/api/mutations?entity=${entityUUID}`)
             .then((r) => (r.ok ? (r.json() as Promise<Array<Record<string, unknown>>>) : Promise.resolve([])))
@@ -131,14 +125,12 @@ export function CompanyOverview({
           })(),
         ])
 
-        // Apply mutations to monetary balances
         for (const m of mutationsData) {
           const assetId = typeof m.asset === "string" ? m.asset : null
           const delta = typeof m.delta === "number" ? m.delta : 0
           if (assetId) balances.set(assetId, (balances.get(assetId) ?? 0) + delta)
         }
 
-        // Apply live prices for ticker assets (units × price)
         for (const [assetId, ticker] of tickerByAsset) {
           if (quotesMap.has(ticker)) {
             const units = unitBalances.get(assetId) ?? 0
@@ -148,7 +140,6 @@ export function CompanyOverview({
 
         setAssetBalances(balances)
 
-        // Build trend chart (uses transaction entry prices, not live)
         txPoints.sort((a, b) => a.date - b.date)
         if (txPoints.length > 0) {
           let cumulative = 0
@@ -223,30 +214,14 @@ export function CompanyOverview({
           <CardHeader>
             <div className="flex items-start justify-between gap-4">
               <div className="space-y-1">
-                <CardTitle>{companyName ?? "—"}</CardTitle>
-                <CardDescription>Financial overview for this company.</CardDescription>
+                <CardTitle>{familyOfficeName ?? "—"}</CardTitle>
+                <CardDescription>Consolidated wealth overview for this family office.</CardDescription>
               </div>
-              {(industry || country || registrationNumber) && (
-                <div className="flex flex-wrap gap-1.5">
-                  {industry && (
-                    <span className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] leading-none">
-                      <span className="text-muted-foreground">Industry</span>
-                      <span className="font-medium">{industry}</span>
-                    </span>
-                  )}
-                  {country && (
-                    <span className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] leading-none">
-                      <span className="text-muted-foreground">Country</span>
-                      <span className="font-medium">{country}</span>
-                    </span>
-                  )}
-                  {registrationNumber && (
-                    <span className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] leading-none">
-                      <span className="text-muted-foreground">Reg.</span>
-                      <span className="font-medium">{registrationNumber}</span>
-                    </span>
-                  )}
-                </div>
+              {country && (
+                <span className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] leading-none">
+                  <span className="text-muted-foreground">Country</span>
+                  <span className="font-medium">{country}</span>
+                </span>
               )}
             </div>
           </CardHeader>
@@ -264,7 +239,7 @@ export function CompanyOverview({
           </CardContent>
         </Card>
 
-        <PortfolioTrendChart data={trendData} assetsHref={`/company/${companyId}/assets`} />
+        <PortfolioTrendChart data={trendData} assetsHref={`/family-office/${familyOfficeId}/assets`} />
       </div>
     </div>
   )
