@@ -855,7 +855,7 @@ export function InvestorSheet({
 
               {/* ── Profile tab ── */}
               <TabsContent value="profile" className="mt-4">
-                <div className="flex flex-col gap-4 max-w-sm">
+                <div className="flex flex-col gap-4">
                   <div className="space-y-1.5">
                     <Label htmlFor="inv-name">Name</Label>
                     <Input

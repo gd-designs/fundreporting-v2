@@ -1,10 +1,10 @@
-export default function FundTasksPage() {
-  return (
-    <div className="p-6 md:p-8">
-      <div className="mx-auto max-w-7xl">
-        <h1 className="text-2xl font-semibold tracking-tight">Tasks</h1>
-        <p className="text-sm text-muted-foreground mt-1">Coming soon.</p>
-      </div>
-    </div>
-  )
+import { notFound } from "next/navigation"
+import { getEntityRecord } from "@/lib/entity-page"
+import { TaskManager } from "@/components/task-manager"
+
+export default async function Page({ params }: { params: Promise<{ id: string; fundId: string }> }) {
+  const { fundId } = await params
+  const record = await getEntityRecord("fund", fundId)
+  if (!record) notFound()
+  return <TaskManager entityId={record.entity} />
 }

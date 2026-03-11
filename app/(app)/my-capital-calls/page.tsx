@@ -88,7 +88,7 @@ export default function MyCapitalCallsPage() {
   }
 
   return (
-    <div className="p-6 max-w-3xl mx-auto space-y-8">
+    <div className="p-6 space-y-8">
       <div>
         <h1 className="text-xl font-semibold">My Capital Calls</h1>
         <p className="text-sm text-muted-foreground mt-1">

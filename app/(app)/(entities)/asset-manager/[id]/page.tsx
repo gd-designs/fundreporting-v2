@@ -36,7 +36,7 @@ export default async function AssetManagerPage({
 
   return (
     <div className="p-6 md:p-8">
-      <div className="mx-auto max-w-7xl">
+      <div className="mx-auto">
         <AssetManagerOverview
           assetManagerId={id}
           initialFunds={funds}

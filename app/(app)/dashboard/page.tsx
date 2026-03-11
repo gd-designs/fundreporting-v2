@@ -112,7 +112,7 @@ export default async function DashboardPage() {
 
   return (
     <div className="p-6 md:p-8">
-      <div className="mx-auto flex w-full flex-col gap-6">
+      <div className="flex w-full flex-col gap-6">
 
         {entities.length === 0 && (
           <Card className="border-dashed">

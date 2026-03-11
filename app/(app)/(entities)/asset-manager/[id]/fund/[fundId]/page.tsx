@@ -73,7 +73,7 @@ export default async function FundOverviewPage({
 
   return (
     <div className="p-6 md:p-8">
-      <div className="mx-auto max-w-7xl flex flex-col gap-8">
+      <div className="mx-auto flex flex-col gap-8">
 
         {/* Header */}
         <div className="flex flex-col gap-1">

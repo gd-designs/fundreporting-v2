@@ -1,10 +1,7 @@
-export default function DocumentsPage() {
-  return (
-    <div>
-      <h1 className="text-2xl font-semibold">Documents</h1>
-      <p className="text-muted-foreground mt-1">
-        Files and documents across all your entities.
-      </p>
-    </div>
-  )
+import { getEntities } from "@/lib/entities"
+import { AllDocumentsManager } from "@/components/all-documents-manager"
+
+export default async function DocumentsPage() {
+  const entities = await getEntities()
+  return <AllDocumentsManager entities={entities} />
 }

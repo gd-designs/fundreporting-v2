@@ -82,7 +82,7 @@ export function FundCapTableView({
 
   return (
     <div className="p-6 md:p-8">
-      <div className="mx-auto max-w-7xl flex flex-col gap-6">
+      <div className="flex flex-col gap-6">
 
         {/* Stats */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">

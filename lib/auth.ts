@@ -10,6 +10,7 @@ export type CurrentUser = {
   name: string
   email: string
   created_at: string
+  avatar?: { url?: string } | null
 }
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {
@@ -18,14 +19,27 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
 
   try {
     const res = await fetch(`${process.env.XANO_API_URL}/auth/me`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
-
     if (!res.ok) return null
-    return res.json() as Promise<CurrentUser>
+    const me = await res.json() as CurrentUser
+
+    // Enrich with full user profile (avatar, etc.)
+    try {
+      const profileRes = await fetch(`${process.env.PLATFORM_API_URL}/user/${me.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store',
+      })
+      if (profileRes.ok) {
+        const profile = await profileRes.json() as { avatar?: { url?: string } | null }
+        return { ...me, avatar: profile.avatar ?? null }
+      }
+    } catch {
+      // fall through — return me without avatar
+    }
+
+    return me
   } catch {
     return null
   }

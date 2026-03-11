@@ -13,7 +13,7 @@ export default async function FundMutationsPage({
 
   return (
     <div className="p-6 md:p-8">
-      <div className="mx-auto max-w-7xl flex flex-col gap-6">
+      <div className="mx-auto flex flex-col gap-6">
         <div>
           <h2 className="text-lg font-semibold">Value Mutations</h2>
           <p className="text-muted-foreground text-sm mt-0.5">Record of value mutations across assets in this fund.</p>

@@ -7,22 +7,33 @@ import {
   Activity,
   ArrowLeftRight,
   BarChart3,
+  BookOpen,
   Briefcase,
   Building2,
   CheckSquare,
+  ChevronRight,
   CircleMinus,
   CirclePlus,
   FileText,
   Globe,
   LayoutDashboard,
+  Landmark,
   ListTodo,
+  Plus,
   RefreshCcw,
   Shield,
+  Star,
   Table,
   TrendingUp,
   Users,
   Users2,
+  X,
 } from "lucide-react"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 
 import { NavUser } from "@/components/nav-user"
 import { EntitySwitcher } from "@/components/entity-switcher"
@@ -35,8 +46,12 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarRail,
   SidebarSeparator,
 } from "@/components/ui/sidebar"
@@ -48,8 +63,32 @@ const NAV_ITEMS = [
   { title: "Entities", url: "/entities", icon: Building2 },
   { title: "All Tasks", url: "/tasks", icon: CheckSquare },
   { title: "All Documents", url: "/documents", icon: FileText },
-  { title: "Portfolio Hub", url: "/portfolio", icon: BarChart3 },
 ]
+
+const DOCS_ITEMS = [
+  { title: "Introduction", url: "https://docs.fundreporting.com/introduction" },
+  { title: "Get Started", url: "https://docs.fundreporting.com/get-started" },
+  { title: "Tutorials", url: "https://docs.fundreporting.com/tutorials" },
+  { title: "Changelog", url: "https://docs.fundreporting.com/changelog" },
+]
+
+const ENTITY_TYPE_ICONS: Record<string, React.ElementType> = {
+  portfolio: Landmark,
+  fund: Landmark,
+  company: Building2,
+  family_office: Users,
+  asset_manager: BarChart3,
+}
+
+const ENTITY_HREFS: Record<string, string> = {
+  portfolio: "/portfolio",
+  company: "/company",
+  fund: "/fund",
+  family_office: "/family-office",
+  asset_manager: "/asset-manager",
+}
+
+const QUICK_ACCESS_KEY = "sidebar:quick-access"
 
 const ENTITY_SLUGS: Record<string, EntityType> = {
   portfolio: "portfolio",
@@ -330,28 +369,162 @@ function FundInAmNav({
   )
 }
 
-function NavLinks() {
+function NavLinks({ entities }: { entities: UnifiedEntity[] }) {
   const pathname = usePathname()
+
+  const [pinnedIds, setPinnedIds] = React.useState<string[]>(() => {
+    if (typeof window === "undefined") return []
+    try { return JSON.parse(localStorage.getItem(QUICK_ACCESS_KEY) ?? "[]") } catch { return [] }
+  })
+  const [showPicker, setShowPicker] = React.useState(false)
+
+  function pin(id: string) {
+    setPinnedIds(prev => {
+      const next = prev.includes(id) ? prev : [...prev, id]
+      localStorage.setItem(QUICK_ACCESS_KEY, JSON.stringify(next))
+      return next
+    })
+    setShowPicker(false)
+  }
+
+  function unpin(id: string) {
+    setPinnedIds(prev => {
+      const next = prev.filter(p => p !== id)
+      localStorage.setItem(QUICK_ACCESS_KEY, JSON.stringify(next))
+      return next
+    })
+  }
+
+  const pinnedEntities = pinnedIds
+    .map(id => entities.find(e => e.id === id))
+    .filter(Boolean) as UnifiedEntity[]
+
+  const unpinned = entities.filter(e => !pinnedIds.includes(e.id))
+
   return (
-    <SidebarGroup>
-      <SidebarGroupLabel>Platform</SidebarGroupLabel>
-      <SidebarMenu>
-        {NAV_ITEMS.map(item => (
-          <SidebarMenuItem key={item.title}>
-            <SidebarMenuButton
-              asChild
-              tooltip={item.title}
-              isActive={pathname === item.url || pathname.startsWith(item.url + "/")}
-            >
-              <Link href={item.url}>
-                <item.icon />
-                <span>{item.title}</span>
-              </Link>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        ))}
-      </SidebarMenu>
-    </SidebarGroup>
+    <>
+      {/* Platform */}
+      <SidebarGroup>
+        <SidebarGroupLabel>Platform</SidebarGroupLabel>
+        <SidebarMenu>
+          {NAV_ITEMS.map(item => (
+            <SidebarMenuItem key={item.title}>
+              <SidebarMenuButton
+                asChild
+                tooltip={item.title}
+                isActive={pathname === item.url || pathname.startsWith(item.url + "/")}
+              >
+                <Link href={item.url}>
+                  <item.icon />
+                  <span>{item.title}</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
+        </SidebarMenu>
+      </SidebarGroup>
+
+      {/* Documentation */}
+      <SidebarGroup>
+        <SidebarMenu>
+          <Collapsible asChild defaultOpen={false} className="group/docs">
+            <SidebarMenuItem>
+              <CollapsibleTrigger asChild>
+                <SidebarMenuButton tooltip="Documentation">
+                  <BookOpen />
+                  <span>Documentation</span>
+                  <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/docs:rotate-90" />
+                </SidebarMenuButton>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <SidebarMenuSub>
+                  {DOCS_ITEMS.map(doc => (
+                    <SidebarMenuSubItem key={doc.title}>
+                      <SidebarMenuSubButton asChild>
+                        <a href={doc.url} target="_blank" rel="noopener noreferrer">
+                          <span>{doc.title}</span>
+                        </a>
+                      </SidebarMenuSubButton>
+                    </SidebarMenuSubItem>
+                  ))}
+                </SidebarMenuSub>
+              </CollapsibleContent>
+            </SidebarMenuItem>
+          </Collapsible>
+        </SidebarMenu>
+      </SidebarGroup>
+
+      {/* Quick Access */}
+      <SidebarGroup>
+        <SidebarGroupLabel className="flex items-center justify-between pr-1">
+          <span>Quick access</span>
+          <button
+            onClick={() => setShowPicker(v => !v)}
+            className="text-muted-foreground hover:text-foreground rounded p-0.5 transition-colors"
+            title="Add to quick access"
+          >
+            <Plus className="size-3.5" />
+          </button>
+        </SidebarGroupLabel>
+
+        {showPicker && unpinned.length > 0 && (
+          <div className="mx-2 mb-2 rounded-md border bg-popover p-1 text-sm shadow-md">
+            {unpinned.map(e => {
+              const Icon = ENTITY_TYPE_ICONS[e.type] ?? Building2
+              return (
+                <button
+                  key={e.id}
+                  onClick={() => pin(e.id)}
+                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-accent"
+                >
+                  <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+                  <span className="truncate">{e.name ?? "—"}</span>
+                </button>
+              )
+            })}
+          </div>
+        )}
+        {showPicker && unpinned.length === 0 && (
+          <p className="px-3 pb-2 text-xs text-muted-foreground">All entities pinned.</p>
+        )}
+
+        <SidebarMenu>
+          {pinnedEntities.length === 0 ? (
+            <SidebarMenuItem>
+              <span className="px-3 text-xs text-muted-foreground">
+                Pin entities for quick access.
+              </span>
+            </SidebarMenuItem>
+          ) : (
+            pinnedEntities.map(e => {
+              const Icon = ENTITY_TYPE_ICONS[e.type] ?? Building2
+              const href = `${ENTITY_HREFS[e.type] ?? ""}/${e.id}`
+              return (
+                <SidebarMenuItem key={e.id}>
+                  <SidebarMenuButton
+                    asChild
+                    tooltip={e.name ?? "—"}
+                    isActive={pathname.startsWith(href)}
+                  >
+                    <Link href={href}>
+                      <Icon />
+                      <span>{e.name ?? "—"}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                  <SidebarMenuAction
+                    onClick={() => unpin(e.id)}
+                    title="Remove from quick access"
+                    showOnHover
+                  >
+                    <X className="size-3" />
+                  </SidebarMenuAction>
+                </SidebarMenuItem>
+              )
+            })
+          )}
+        </SidebarMenu>
+      </SidebarGroup>
+    </>
   )
 }
 
@@ -447,7 +620,7 @@ export function AppSidebar({ user, entities: initialEntities, ...props }: AppSid
             currencyCode={activeEntity?._currency?.code}
           />
         ) : (
-          <NavLinks />
+          <NavLinks entities={entities} />
         )}
       </SidebarContent>
       <SidebarFooter>

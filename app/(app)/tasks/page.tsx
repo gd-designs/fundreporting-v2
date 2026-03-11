@@ -1,10 +1,13 @@
-export default function TasksPage() {
+import { getEntities } from "@/lib/entities"
+import { TaskManager } from "@/components/task-manager"
+
+export default async function TasksPage() {
+  const entities = await getEntities()
   return (
-    <div>
-      <h1 className="text-2xl font-semibold">Tasks</h1>
-      <p className="text-muted-foreground mt-1">
-        Workflow tasks across all your entities.
-      </p>
-    </div>
+    <TaskManager
+      entities={entities}
+      title="All Tasks"
+      description="Tasks across all your entities."
+    />
   )
 }

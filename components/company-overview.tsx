@@ -212,7 +212,7 @@ export function CompanyOverview({
 
   return (
     <div className="p-6 md:p-8">
-      <div className="mx-auto max-w-7xl flex flex-col gap-6">
+      <div className="flex flex-col gap-6">
         <Card>
           <CardHeader>
             <CardTitle>{companyName ?? "—"}</CardTitle>

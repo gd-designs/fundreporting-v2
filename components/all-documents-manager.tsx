@@ -5,16 +5,17 @@ import Link from "next/link"
 import {
   ExternalLink,
   FileText,
+  Layers,
   LayoutGrid,
   LayoutList,
   Paperclip,
   Pencil,
   Search,
-  Upload,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Select,
   SelectContent,
@@ -22,7 +23,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Textarea } from "@/components/ui/textarea"
 import {
   Dialog,
   DialogContent,
@@ -32,14 +32,8 @@ import {
 } from "@/components/ui/dialog"
 import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
-import { UploadDocumentsDialog } from "@/components/upload-documents-dialog"
-import {
-  fetchDocuments,
-  formatFileSize,
-  patchDocument,
-  type EntityDocument,
-} from "@/lib/documents"
-import { fetchEntityAssets } from "@/lib/entity-assets"
+import { formatFileSize, patchDocument, type EntityDocument } from "@/lib/documents"
+import type { UnifiedEntity } from "@/lib/types"
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
@@ -68,6 +62,14 @@ const OBJECT_TYPE_BADGE: Record<string, string> = {
   transaction: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
   mutation: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
   document: "bg-muted text-muted-foreground",
+}
+
+const ENTITY_HREFS: Record<string, string> = {
+  portfolio: "/portfolio",
+  company: "/company",
+  fund: "/fund",
+  family_office: "/family-office",
+  asset_manager: "/asset-manager",
 }
 
 function getObjectHref(basePath: string, objectType: string, objectId: string): string | null {
@@ -147,23 +149,22 @@ function EditDocDialog({
   )
 }
 
-// ─── Row (list view) ─────────────────────────────────────────────────────────
+// ─── Row ─────────────────────────────────────────────────────────────────────
 
 function DocRow({
   doc,
   basePath,
-  objectNames,
+  entityName,
   onEdit,
 }: {
   doc: EntityDocument
-  basePath: string
-  objectNames: Map<string, string>
+  basePath: string | null
+  entityName: string | null
   onEdit: (doc: EntityDocument) => void
 }) {
-  const href = getObjectHref(basePath, doc.objectType, doc.objectId)
+  const href = basePath ? getObjectHref(basePath, doc.objectType, doc.objectId) : null
   const badge = OBJECT_TYPE_BADGE[doc.objectType] ?? OBJECT_TYPE_BADGE.document
   const label = OBJECT_TYPE_LABEL[doc.objectType] ?? doc.objectType
-  const objectName = objectNames.get(doc.objectId)
 
   return (
     <div className="flex items-center gap-3 rounded-md border px-4 py-3 hover:bg-muted/20">
@@ -172,8 +173,13 @@ function DocRow({
         <div className="flex items-center gap-2 flex-wrap">
           <p className="text-sm font-medium truncate">{doc.name}</p>
           <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${badge}`}>
-            {objectName ? `${label} · ${objectName}` : label}
+            {label}
           </span>
+          {entityName && (
+            <span className="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-muted text-muted-foreground">
+              {entityName}
+            </span>
+          )}
         </div>
         {doc.description && (
           <p className="text-xs text-muted-foreground truncate mt-0.5">{doc.description}</p>
@@ -208,31 +214,37 @@ function DocRow({
   )
 }
 
-// ─── Card (grid view) ────────────────────────────────────────────────────────
+// ─── Card ────────────────────────────────────────────────────────────────────
 
 function DocCard({
   doc,
   basePath,
-  objectNames,
+  entityName,
   onEdit,
 }: {
   doc: EntityDocument
-  basePath: string
-  objectNames: Map<string, string>
+  basePath: string | null
+  entityName: string | null
   onEdit: (doc: EntityDocument) => void
 }) {
-  const href = getObjectHref(basePath, doc.objectType, doc.objectId)
+  const href = basePath ? getObjectHref(basePath, doc.objectType, doc.objectId) : null
   const badge = OBJECT_TYPE_BADGE[doc.objectType] ?? OBJECT_TYPE_BADGE.document
   const label = OBJECT_TYPE_LABEL[doc.objectType] ?? doc.objectType
-  const objectName = objectNames.get(doc.objectId)
 
   return (
     <div className="flex flex-col gap-2 rounded-md border p-4 hover:bg-muted/20">
       <div className="flex items-start justify-between gap-2">
         <FileText className="size-5 shrink-0 text-muted-foreground mt-0.5" />
-        <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${badge}`}>
-          {objectName ? `${label} · ${objectName}` : label}
-        </span>
+        <div className="flex gap-1 flex-wrap justify-end">
+          <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${badge}`}>
+            {label}
+          </span>
+          {entityName && (
+            <span className="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-muted text-muted-foreground">
+              {entityName}
+            </span>
+          )}
+        </div>
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium line-clamp-2">{doc.name}</p>
@@ -255,12 +267,7 @@ function DocCard({
             <Pencil className="size-3.5" />
           </button>
           {doc.file?.url && (
-            <a
-              href={doc.file.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-muted-foreground hover:text-foreground"
-            >
+            <a href={doc.file.url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground">
               <FileText className="size-3.5" />
             </a>
           )}
@@ -270,102 +277,135 @@ function DocCard({
   )
 }
 
-// ─── Section ──────────────────────────────────────────────────────────────────
+// ─── Entity group ─────────────────────────────────────────────────────────────
 
-function DocSection({
-  title,
+function EntityGroup({
+  entity,
   docs,
-  basePath,
-  objectNames,
   view,
   onEdit,
+  entityMap,
 }: {
-  title?: string
+  entity: UnifiedEntity
   docs: EntityDocument[]
-  basePath: string
-  objectNames: Map<string, string>
   view: "list" | "grid"
   onEdit: (doc: EntityDocument) => void
+  entityMap: Map<string, UnifiedEntity>
 }) {
-  if (docs.length === 0) return null
+  const basePath = entity ? `${ENTITY_HREFS[entity.type] ?? ""}/${entity.id}` : null
+  const entityName = entity?.name ?? null
+
   return (
     <div className="space-y-2">
-      {title && <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</p>}
+      <div className="flex items-center gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{entityName ?? "Unknown entity"}</p>
+        <span className="text-xs text-muted-foreground">· {docs.length}</span>
+      </div>
       {view === "list" ? (
         <div className="space-y-1.5">
-          {docs.map((doc) => <DocRow key={doc.id} doc={doc} basePath={basePath} objectNames={objectNames} onEdit={onEdit} />)}
+          {docs.map((doc) => (
+            <DocRow key={doc.id} doc={doc} basePath={basePath} entityName={null} onEdit={onEdit} />
+          ))}
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-          {docs.map((doc) => <DocCard key={doc.id} doc={doc} basePath={basePath} objectNames={objectNames} onEdit={onEdit} />)}
+          {docs.map((doc) => (
+            <DocCard key={doc.id} doc={doc} basePath={basePath} entityName={null} onEdit={onEdit} />
+          ))}
         </div>
       )}
     </div>
   )
 }
 
-// ─── Main component ───────────────────────────────────────────────────────────
+// ─── Main ─────────────────────────────────────────────────────────────────────
 
-export function DocumentsManager({
-  entityUUID,
-  basePath,
-}: {
-  entityUUID: string
-  basePath: string
-}) {
+export function AllDocumentsManager({ entities }: { entities: UnifiedEntity[] }) {
   const [documents, setDocuments] = React.useState<EntityDocument[]>([])
-  const [objectNames, setObjectNames] = React.useState<Map<string, string>>(new Map())
   const [loading, setLoading] = React.useState(true)
   const [search, setSearch] = React.useState("")
   const [typeFilter, setTypeFilter] = React.useState<TypeFilter>("all")
   const [sort, setSort] = React.useState<"newest" | "oldest" | "name">("newest")
   const [view, setView] = React.useState<"list" | "grid">("list")
+  const [groupByEntity, setGroupByEntity] = React.useState(false)
   const [editDoc, setEditDoc] = React.useState<EntityDocument | null>(null)
 
+  const entityMap = React.useMemo(
+    () => new Map(entities.map((e) => [e.entity, e])),
+    [entities],
+  )
+
   async function load() {
+    setLoading(true)
     try {
-      const [docs, assets] = await Promise.all([
-        fetchDocuments(entityUUID),
-        fetchEntityAssets(entityUUID).catch(() => []),
-      ])
-      setDocuments(docs)
-      const names = new Map<string, string>()
-      for (const a of assets) if (a.name) names.set(a.id, a.name)
-      setObjectNames(names)
+      const res = await fetch("/api/documents", { cache: "no-store" })
+      const payload = await res.json() as { documents?: unknown }
+      const raw = Array.isArray(payload.documents) ? payload.documents : []
+      // Map raw docs
+      const mapped: EntityDocument[] = raw
+        .map((item: unknown) => {
+          if (!item || typeof item !== "object") return null
+          const d = item as Record<string, unknown>
+          if (typeof d.id !== "string") return null
+          const file = d.file as Record<string, unknown> | null | undefined
+          return {
+            id: d.id,
+            createdAt: typeof d.created_at === "number" ? d.created_at : 0,
+            name: typeof d.name === "string" ? d.name : "",
+            description: typeof d.description === "string" ? d.description : null,
+            entityId: typeof d.entity === "string" ? d.entity : "",
+            objectType: typeof d.object_type === "string" ? d.object_type : "",
+            objectId: typeof d.object_id === "string" ? d.object_id : "",
+            file: file
+              ? {
+                  url: typeof file.url === "string" ? file.url : "",
+                  name: typeof file.name === "string" ? file.name : "",
+                  size: typeof file.size === "number" ? file.size : 0,
+                  mime: typeof file.mime === "string" ? file.mime : "",
+                }
+              : null,
+          } satisfies EntityDocument
+        })
+        .filter((d): d is EntityDocument => d !== null)
+      setDocuments(mapped)
     } catch {
-      // silently fail — empty state covers it
+      // silently fail
     } finally {
       setLoading(false)
     }
   }
 
-  React.useEffect(() => { void load() }, [entityUUID]) // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(() => { void load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Filter + sort
   const filtered = React.useMemo(() => {
     let docs = documents
-
     if (search.trim()) {
       const q = search.toLowerCase()
       docs = docs.filter(
         (d) => d.name.toLowerCase().includes(q) || (d.description ?? "").toLowerCase().includes(q),
       )
     }
-
     if (typeFilter !== "all") {
       docs = docs.filter((d) => d.objectType === typeFilter)
     }
-
     return [...docs].sort((a, b) => {
       if (sort === "oldest") return a.createdAt - b.createdAt
       if (sort === "name") return a.name.localeCompare(b.name)
-      return b.createdAt - a.createdAt // newest
+      return b.createdAt - a.createdAt
     })
   }, [documents, search, typeFilter, sort])
 
-  const linked = filtered.filter((d) => d.objectType !== "document")
-  const general = filtered.filter((d) => d.objectType === "document")
-  const showSections = typeFilter === "all" && general.length > 0 && linked.length > 0
+  // Group by entity (using entityId which is the entity UUID)
+  const groups = React.useMemo(() => {
+    if (!groupByEntity) return null
+    const map = new Map<string, EntityDocument[]>()
+    for (const doc of filtered) {
+      const arr = map.get(doc.entityId) ?? []
+      arr.push(doc)
+      map.set(doc.entityId, arr)
+    }
+    return map
+  }, [filtered, groupByEntity])
 
   return (
     <div className="p-6 md:p-8">
@@ -373,22 +413,11 @@ export function DocumentsManager({
         {/* Header */}
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h2 className="text-lg font-semibold">Documents</h2>
+            <h1 className="text-xl font-semibold">All Documents</h1>
             <p className="text-muted-foreground text-sm mt-0.5">
-              {loading ? "Loading…" : `${documents.length} document${documents.length !== 1 ? "s" : ""}`}
+              {loading ? "Loading…" : `${documents.length} document${documents.length !== 1 ? "s" : ""} across all entities`}
             </p>
           </div>
-          <UploadDocumentsDialog
-            entityId={entityUUID}
-            objectType="document"
-            objectId={entityUUID}
-            onUploaded={load}
-          >
-            <Button size="sm">
-              <Upload className="size-3.5 mr-1.5" />
-              Upload
-            </Button>
-          </UploadDocumentsDialog>
         </div>
 
         {/* Toolbar */}
@@ -413,6 +442,13 @@ export function DocumentsManager({
                 <SelectItem value="name">Name A–Z</SelectItem>
               </SelectContent>
             </Select>
+            <button
+              onClick={() => setGroupByEntity((v) => !v)}
+              title="Group by entity"
+              className={`rounded-md border p-2 transition-colors ${groupByEntity ? "bg-muted" : "hover:bg-muted/50"}`}
+            >
+              <Layers className="size-4" />
+            </button>
             <div className="flex items-center rounded-md border">
               <button
                 onClick={() => setView("list")}
@@ -452,7 +488,7 @@ export function DocumentsManager({
         {/* Content */}
         {loading ? (
           <div className="space-y-2">
-            {Array.from({ length: 4 }).map((_, i) => (
+            {Array.from({ length: 5 }).map((_, i) => (
               <Skeleton key={i} className="h-14 w-full" />
             ))}
           </div>
@@ -464,17 +500,59 @@ export function DocumentsManager({
               <EmptyDescription>
                 {search || typeFilter !== "all"
                   ? "No documents match your filters."
-                  : "Upload documents to attach them to this entity."}
+                  : "Upload documents from an entity's Documents tab."}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
-        ) : showSections ? (
-          <div className="space-y-6">
-            <DocSection docs={linked} basePath={basePath} objectNames={objectNames} view={view} onEdit={setEditDoc} />
-            <DocSection title="General" docs={general} basePath={basePath} objectNames={objectNames} view={view} onEdit={setEditDoc} />
+        ) : groupByEntity && groups ? (
+          <div className="space-y-8">
+            {Array.from(groups.entries()).map(([entityId, docs]) => {
+              const entity = entityMap.get(entityId)
+              if (!entity) return null
+              return (
+                <EntityGroup
+                  key={entityId}
+                  entity={entity}
+                  docs={docs}
+                  view={view}
+                  onEdit={setEditDoc}
+                  entityMap={entityMap}
+                />
+              )
+            })}
+          </div>
+        ) : view === "list" ? (
+          <div className="space-y-1.5">
+            {filtered.map((doc) => {
+              const entity = entityMap.get(doc.entityId)
+              const basePath = entity ? `${ENTITY_HREFS[entity.type] ?? ""}/${entity.id}` : null
+              return (
+                <DocRow
+                  key={doc.id}
+                  doc={doc}
+                  basePath={basePath}
+                  entityName={entity?.name ?? null}
+                  onEdit={setEditDoc}
+                />
+              )
+            })}
           </div>
         ) : (
-          <DocSection docs={filtered} basePath={basePath} objectNames={objectNames} view={view} onEdit={setEditDoc} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {filtered.map((doc) => {
+              const entity = entityMap.get(doc.entityId)
+              const basePath = entity ? `${ENTITY_HREFS[entity.type] ?? ""}/${entity.id}` : null
+              return (
+                <DocCard
+                  key={doc.id}
+                  doc={doc}
+                  basePath={basePath}
+                  entityName={entity?.name ?? null}
+                  onEdit={setEditDoc}
+                />
+              )
+            })}
+          </div>
         )}
       </div>
 

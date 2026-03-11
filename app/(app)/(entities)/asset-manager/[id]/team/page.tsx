@@ -20,7 +20,7 @@ export default async function TeamPage({ params }: { params: Promise<{ id: strin
 
   return (
     <div className="p-6 md:p-8">
-      <div className="mx-auto max-w-7xl">
+      <div className="mx-auto">
         <TeamManager entityUUID={record.entity} />
       </div>
     </div>
