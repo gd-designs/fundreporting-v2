@@ -135,7 +135,7 @@ export function mapXanoAsset(raw: unknown): EntityAsset | null {
             if (entry.shareholder === myShareholderId) myDeployed += amount
           }
         }
-        if (totalDeployed === 0) return { stakeValue: null, ownershipPct: null, totalShares: null, myShares: null }
+        if (totalDeployed === 0) return { shareholderEntityId, stakeValue: null, ownershipPct: null, totalShares: null, myShares: null }
         const ownershipPct = myDeployed / totalDeployed
         return { shareholderEntityId, stakeValue: myDeployed, ownershipPct, totalShares: null, myShares: null }
       }
