@@ -277,16 +277,14 @@ export function CapitalCallSend({ capitalCall, onSuccess }: Props) {
         createdEquityAssetId = equityAssetId;
       }
 
-      // 5. Mark capital call as paid, acknowledged, and record received_at
-      await fetch(`/api/capital-calls/${capitalCall.id}`, {
-        method: "PATCH",
+      // 5. Mark capital call as paid + received_at; /receive also creates
+      //    a capital_call_settled task + notification for the entity owner
+      await fetch(`/api/capital-calls/${capitalCall.id}/receive`, {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           status: "paid",
-          received_at: date!.getTime(),
-          ...(!capitalCall.acknowledged_at
-            ? { acknowledged_at: Date.now() }
-            : {}),
+          ...(!capitalCall.acknowledged_at ? { acknowledged_at: Date.now() } : {}),
         }),
       });
 
