@@ -10,6 +10,7 @@ import {
   Shield,
   Mail,
   MailCheck,
+  BadgeCheck,
 } from "lucide-react";
 import {
   fetchShareClasses,
@@ -1324,6 +1325,11 @@ export function CapTableManager({
                               {sh?.is_ubo && (
                                 <span title="UBO">
                                   <Shield className="size-3 text-amber-500" />
+                                </span>
+                              )}
+                              {sh?.accepted && (
+                                <span title="Accepted invitation">
+                                  <BadgeCheck className="size-3 text-green-500" />
                                 </span>
                               )}
                             </div>

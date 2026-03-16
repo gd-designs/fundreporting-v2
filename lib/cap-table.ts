@@ -29,6 +29,9 @@ export type CapTableShareholder = {
   email: string | null
   invited_at: number | null
   invite_sent: boolean | null
+  accepted: boolean | null
+  accepted_at: number | null
+  rejected: boolean | null
   notes: string | null
   created_at: number
 }
