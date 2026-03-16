@@ -24,6 +24,7 @@ import {
 } from "@/lib/cap-table";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
@@ -1323,14 +1324,28 @@ export function CapTableManager({
                                 {shareholderName(entry.shareholder)}
                               </button>
                               {sh?.is_ubo && (
-                                <span title="UBO">
-                                  <Shield className="size-3 text-amber-500" />
-                                </span>
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <span className="cursor-default">
+                                        <Shield className="size-3 text-amber-500" />
+                                      </span>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Ultimate Beneficial Owner</TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
                               )}
                               {sh?.accepted && (
-                                <span title="Accepted invitation">
-                                  <BadgeCheck className="size-3 text-green-500" />
-                                </span>
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <span className="cursor-default">
+                                        <BadgeCheck className="size-3 text-green-500" />
+                                      </span>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Accepted invitation{sh.accepted_at ? ` on ${new Date(sh.accepted_at).toLocaleDateString()}` : ""}</TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
                               )}
                             </div>
                           </td>
@@ -1613,26 +1628,47 @@ export function CapTableManager({
                     return (
                     <tr key={sh.id} className="border-b hover:bg-muted/30">
                       <td className="py-2 px-4 font-medium">
+                        <TooltipProvider>
                         <div className="flex items-center gap-1.5">
                           <span>{sh.name ?? "—"}{isYou && <span className="text-muted-foreground font-normal ml-1">(You)</span>}</span>
                           {entityOwner != null && sh.user === entityOwner && (
                             <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">Owner</span>
                           )}
+                          {sh.accepted && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="cursor-default">
+                                  <BadgeCheck className="size-3.5 text-green-500" />
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                Accepted invitation{sh.accepted_at ? ` on ${new Date(sh.accepted_at).toLocaleDateString()}` : ""}
+                              </TooltipContent>
+                            </Tooltip>
+                          )}
                         </div>
+                        </TooltipProvider>
                       </td>
                       <td className="py-2 px-4 text-muted-foreground capitalize">
                         {sh.type ?? "—"}
                       </td>
                       <td className="py-2 px-4">
                         {sh.role === "ubo" ? (
+                          <TooltipProvider>
                           <div className="flex items-center gap-1.5">
-                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
-                              <Shield className="size-3" />UBO
-                            </span>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 cursor-default">
+                                  <Shield className="size-3" />UBO
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent>Ultimate Beneficial Owner — has direct or indirect control over this entity</TooltipContent>
+                            </Tooltip>
                             {sh.ubo_percentage != null && (
                               <span className="text-xs text-muted-foreground">{sh.ubo_percentage}%</span>
                             )}
                           </div>
+                          </TooltipProvider>
                         ) : sh.role === "stakeholder" ? (
                           <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">Stakeholder</span>
                         ) : sh.role === "investor" ? (
