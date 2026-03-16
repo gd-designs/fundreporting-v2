@@ -22,23 +22,48 @@ export async function GET(req: NextRequest) {
   const entityUUID = typeof shareholder.entity === "string" ? shareholder.entity : null
   if (!entityUUID) return NextResponse.json({ value: null })
 
-  // 2. Fetch all cap table entries for the entity in parallel
-  const entriesRes = await fetch(`${base}/cap_table_entry`, { headers, cache: "no-store" })
-  if (!entriesRes.ok) return NextResponse.json({ value: null })
-  const allEntries = (await entriesRes.json()) as Array<Record<string, unknown>>
-  const entityEntries = allEntries.filter((e) => e.entity === entityUUID)
+  // 2. Fetch entries, capital calls, and share classes in parallel
+  const [allEntries, allCalls, allShareClasses] = await Promise.all([
+    fetch(`${base}/cap_table_entry?entity=${entityUUID}`, { headers, cache: "no-store" })
+      .then(r => r.ok ? r.json() : []) as Promise<Array<Record<string, unknown>>>,
+    fetch(`${base}/capital_call?entity=${entityUUID}`, { headers, cache: "no-store" })
+      .then(r => r.ok ? r.json() : []) as Promise<Array<Record<string, unknown>>>,
+    fetch(`${base}/share_class?entity=${entityUUID}`, { headers, cache: "no-store" })
+      .then(r => r.ok ? r.json() : []) as Promise<Array<Record<string, unknown>>>,
+  ])
 
-  const totalShares = entityEntries.reduce(
-    (s, e) => s + (typeof e.shares_issued === "number" ? e.shares_issued : 0),
-    0,
+  const entityEntries = allEntries
+  // Only count deployed calls (matches cap-table-manager logic)
+  const deployedCalls = allCalls.filter((c) => c.deployed_at != null)
+
+  // Compute shares the same way cap-table-manager does:
+  // shares per call = amount / share_class.current_nav
+  function sharesForCalls(calls: Array<Record<string, unknown>>) {
+    return calls.reduce((sum, c) => {
+      const sc = allShareClasses.find(s => s.id === c.share_class)
+      const nav = typeof sc?.current_nav === "number" ? sc.current_nav : 0
+      const amount = typeof c.amount === "number" ? c.amount : 0
+      return sum + (nav > 0 && amount > 0 ? amount / nav : 0)
+    }, 0)
+  }
+
+  const myEntryIds = new Set(
+    entityEntries.filter(e => e.shareholder === shareholderId).map(e => e.id as string)
   )
-  if (totalShares === 0) return NextResponse.json({ value: 0, ownershipPct: 0 })
+  const myDeployedCalls = deployedCalls.filter(c => myEntryIds.has(c.cap_table_entry as string))
 
-  const shareholderShares = entityEntries
-    .filter((e) => e.shareholder === shareholderId)
-    .reduce((s, e) => s + (typeof e.shares_issued === "number" ? e.shares_issued : 0), 0)
+  const totalShares = sharesForCalls(deployedCalls)
+  const shareholderShares = sharesForCalls(myDeployedCalls)
 
-  const ownershipPct = shareholderShares / totalShares
+  // Fallback: if share classes aren't linked, use deployed capital amounts
+  const totalDeployed = deployedCalls.reduce((s, c) => s + (typeof c.amount === "number" ? c.amount : 0), 0)
+  const shareholderDeployed = myDeployedCalls.reduce((s, c) => s + (typeof c.amount === "number" ? c.amount : 0), 0)
+
+  if (totalShares === 0 && totalDeployed === 0) return NextResponse.json({ value: 0, ownershipPct: 0 })
+
+  const ownershipPct = totalShares > 0
+    ? shareholderShares / totalShares
+    : shareholderDeployed / totalDeployed
 
   // 3. Fetch entity NAV (reuses the full net-worth calculation with live prices)
   const navParams = new URLSearchParams({ entityUUID, baseCurrency })

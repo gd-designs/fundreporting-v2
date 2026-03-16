@@ -117,7 +117,7 @@ export async function GET(request: Request) {
     currencyByAsset.set(id, currCode)
     const ticker = typeof instr?.ticker === "string" ? instr.ticker.trim().toUpperCase() : ""
     if (ticker) tickerByAsset.set(id, ticker)
-    const shareholderId = typeof asset.cap_table_shareholder === "string" && asset.investable === "equity_stake"
+    const shareholderId = typeof asset.cap_table_shareholder === "string" && (asset.investable === "equity_stake" || asset.investable === "non_investable")
       ? asset.cap_table_shareholder
       : null
     if (shareholderId) stakeShareholderByAsset.set(id, shareholderId)

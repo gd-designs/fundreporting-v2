@@ -112,6 +112,7 @@ const OBJECT_TYPE_LABELS: Record<string, string> = {
   fund: "Fund",
   investor_lead: "Investor Lead",
   capital_call: "Capital Call",
+  capital_call_settled: "Capital Call Settled",
   cap_invite: "Cap Table Invite",
   liability: "Liability",
   document: "Document",
@@ -564,7 +565,7 @@ function TaskRow({
 }) {
   const overdue = isOverdue(task.dueDate, task.status);
   const isDone = task.status === "done";
-  const canAct = currentUserId == null || task.owner === currentUserId || task.assignedTo.includes(currentUserId);
+  const canAct = currentUserId == null || task.owner == null || task.owner === currentUserId || task.assignedTo.includes(currentUserId);
 
   return (
     <div

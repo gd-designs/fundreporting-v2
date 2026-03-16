@@ -1306,7 +1306,7 @@ export function AddAssetDialog({
 
         if (!isCashClass && resolvedCashAssetId && txAmount > 0 && fundingSource !== "leveraged") {
           // Cash legs (non-leveraged, non-cash assets only)
-          if (needsNewCashAccount || recordNewMoneyIn || needsSplit) {
+          if (needsNewCashAccount || (allowNewMoneyIn && recordNewMoneyIn) || needsSplit) {
             await postEntry({
               entry_type: "cash",
               object_type: "asset",

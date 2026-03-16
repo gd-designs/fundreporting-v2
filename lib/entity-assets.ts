@@ -10,6 +10,11 @@ export type EntityAsset = {
   order: number | null
   investable: "investable_cash" | "investable_convert" | "non_investable" | "equity_stake" | null
   capTableShareholder: string | null
+  shareholderEntityId: string | null  // company/fund entity UUID this shareholder belongs to
+  stakeValue: number | null        // myShares × current_nav (book value only; use ownershipPct × liveNAV for live value)
+  ownershipPct: number | null      // my_shares / total_shares across all shareholders
+  totalShares: number | null       // total shares issued across all entries (entity-wide)
+  myShares: number | null          // shares held by this specific shareholder
   shareholder: {
     id: string
     name: string | null
@@ -91,6 +96,65 @@ export function mapXanoAsset(raw: unknown): EntityAsset | null {
         ? item.investable
         : null,
     capTableShareholder: typeof item.cap_table_shareholder === "string" && item.cap_table_shareholder ? item.cap_table_shareholder : null,
+    ...(() => {
+      const sh = item._cap_table_shareholder as Record<string, unknown> | undefined
+      if (!sh || typeof sh.id !== "string") return { shareholderEntityId: null, stakeValue: null, ownershipPct: null, totalShares: null, myShares: null }
+      const myShareholderId = sh.id
+      const shEntity = sh._entity as Record<string, unknown> | undefined
+      const shareholderEntityId = typeof sh.entity === "string" ? sh.entity : null
+      const allEntries = Array.isArray(shEntity?._cap_table_entry) ? shEntity!._cap_table_entry as Array<Record<string, unknown>> : []
+
+      function sharesFromCalls(calls: Array<Record<string, unknown>>): number {
+        return calls.reduce((sum, c) => {
+          const sc = c._share_class as Record<string, unknown> | undefined
+          const nav = typeof sc?.current_nav === "number" ? sc.current_nav : 0
+          const amount = typeof c.amount === "number" ? c.amount : 0
+          const isDeployed = c.deployed_at != null
+          return sum + (isDeployed && nav > 0 && amount > 0 ? amount / nav : 0)
+        }, 0)
+      }
+
+      let totalShares = 0
+      let myShares = 0
+      for (const entry of allEntries) {
+        const calls = Array.isArray(entry._capital_call) ? entry._capital_call as Array<Record<string, unknown>> : []
+        const shares = sharesFromCalls(calls)
+        totalShares += shares
+        if (entry.shareholder === myShareholderId) myShares += shares
+      }
+
+      // Fallback: use deployed capital amounts if no share class nav available
+      if (totalShares === 0) {
+        let totalDeployed = 0, myDeployed = 0
+        for (const entry of allEntries) {
+          const calls = Array.isArray(entry._capital_call) ? entry._capital_call as Array<Record<string, unknown>> : []
+          for (const c of calls) {
+            if (c.deployed_at == null) continue
+            const amount = typeof c.amount === "number" ? c.amount : 0
+            totalDeployed += amount
+            if (entry.shareholder === myShareholderId) myDeployed += amount
+          }
+        }
+        if (totalDeployed === 0) return { stakeValue: null, ownershipPct: null, totalShares: null, myShares: null }
+        const ownershipPct = myDeployed / totalDeployed
+        return { shareholderEntityId, stakeValue: myDeployed, ownershipPct, totalShares: null, myShares: null }
+      }
+
+      const ownershipPct = totalShares > 0 ? myShares / totalShares : null
+      // stakeValue here is book value only (myShares × current_nav)
+      // assets-manager will override with ownershipPct × live company NAV
+      let currentNav: number | null = null
+      outer: for (const entry of allEntries) {
+        const calls = Array.isArray(entry._capital_call) ? entry._capital_call as Array<Record<string, unknown>> : []
+        for (const c of calls) {
+          const sc = c._share_class as Record<string, unknown> | undefined
+          if (typeof sc?.current_nav === "number") { currentNav = sc.current_nav; break outer }
+        }
+      }
+      const stakeValue = currentNav != null && myShares > 0 ? myShares * currentNav : null
+
+      return { shareholderEntityId, stakeValue, ownershipPct, totalShares, myShares }
+    })(),
     shareholder: (() => {
       const sh = item._cap_table_shareholder as Record<string, unknown> | undefined
       if (!sh || typeof sh.id !== "string") return null

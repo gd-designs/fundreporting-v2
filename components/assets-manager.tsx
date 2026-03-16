@@ -304,30 +304,42 @@ export function AssetsManager({ entityUUID, baseCurrency: baseCurrencyProp, allo
     void loadQuotes()
   }, [assets])
 
-  // Load stake values for equity_stake assets (NAV-based valuation)
+  // Compute live stake values: ownershipPct (from embedded data) × company live NAV
   React.useEffect(() => {
-    const stakeAssets = assets.filter((a) => a.capTableShareholder && a.investable === "equity_stake")
+    const stakeAssets = assets.filter(
+      (a) => a.capTableShareholder && a.ownershipPct != null && a.shareholderEntityId
+    )
     if (stakeAssets.length === 0) {
       setStakeValuesByAsset(new Map())
       return
     }
+    // Deduplicate company entities to avoid redundant fetches
+    const uniqueEntities = Array.from(new Set(stakeAssets.map((a) => a.shareholderEntityId!)))
     const load = async () => {
-      const next = new Map<string, number>()
+      const navByEntity = new Map<string, number>()
       await Promise.all(
-        stakeAssets.map(async (asset) => {
+        uniqueEntities.map(async (entityUUID) => {
           try {
-            const params = new URLSearchParams({ shareholder: asset.capTableShareholder! })
+            const params = new URLSearchParams({ entityUUID })
             if (baseCurrencyProp) params.set("baseCurrency", baseCurrencyProp)
-            const res = await fetch(`/api/cap-table-stake-value?${params}`)
+            const res = await fetch(`/api/net-worth?${params}`)
             if (res.ok) {
-              const data = (await res.json()) as { value?: number | null }
-              if (typeof data.value === "number") next.set(asset.id, data.value)
+              const data = (await res.json()) as { netWorth?: number }
+              if (typeof data.netWorth === "number") navByEntity.set(entityUUID, data.netWorth)
             }
-          } catch {
-            // ignore
-          }
-        }),
+          } catch { /* ignore */ }
+        })
       )
+      const next = new Map<string, number>()
+      for (const asset of stakeAssets) {
+        const nav = navByEntity.get(asset.shareholderEntityId!)
+        if (nav != null && asset.ownershipPct != null) {
+          next.set(asset.id, asset.ownershipPct * nav)
+        } else if (asset.stakeValue != null) {
+          // fallback to book value if NAV fetch failed
+          next.set(asset.id, asset.stakeValue)
+        }
+      }
       setStakeValuesByAsset(next)
     }
     void load()

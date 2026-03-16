@@ -25,6 +25,8 @@ import { DatePickerInput } from "@/components/date-input"
 import type { Asset, UnifiedEntity } from "@/lib/types"
 import { AddEntityDialog } from "@/components/add-entity-dialog"
 import { Switch } from "@/components/ui/switch"
+import { CapitalCallReceive } from "@/components/capital-call-receive"
+import type { CapitalCall } from "@/lib/cap-table"
 
 export type Task = {
   id: string
@@ -39,6 +41,7 @@ export type Task = {
   object_id?: string | null
   owner?: number | null
   assigned_to?: number[] | null
+  assignedTo?: number[] | null
 }
 
 const STATUS_OPTIONS = [
@@ -152,7 +155,7 @@ export function TaskSheet({
             setTask(data)
             setDescription(data.description ?? "")
             // Fetch capital call details + LP entities once we have the full task
-            if (data.object_type === "capital_call" && data.object_id) {
+            if ((data.object_type === "capital_call" || data.object_type === "capital_call_settled") && data.object_id) {
               setCapitalCall(null)
               setPaymentOpen(false)
               setPaymentEntities([])
@@ -377,10 +380,18 @@ export function TaskSheet({
       const existingAssetsRes = await fetch(`/api/assets?entity=${entityUUID}`)
       const existingAssets: Asset[] = existingAssetsRes.ok ? await existingAssetsRes.json() : []
       const existing = existingAssets.find(a =>
-        shareholderId ? a.cap_table_shareholder === shareholderId : (a.investable === "non_investable" && a.name === investmentAssetName)
+        shareholderId ? a.cap_table_shareholder === shareholderId : ((a.investable === "non_investable" || a.investable === "equity_stake") && a.name === investmentAssetName)
       )
       if (existing) {
         investmentAssetId = existing.id
+        // Upgrade to equity_stake if it was created before this fix
+        if (shareholderId && existing.investable !== "equity_stake") {
+          fetch(`/api/assets/${existing.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ investable: "equity_stake" }),
+          }).catch(() => {})
+        }
       } else {
         const newInvRes = await fetch("/api/assets", {
           method: "POST",
@@ -388,7 +399,7 @@ export function TaskSheet({
           body: JSON.stringify({
             entity: entityUUID,
             name: investmentAssetName,
-            investable: "non_investable",
+            investable: shareholderId ? "equity_stake" : "non_investable",
             asset_class: 3,
             ...(shareholderId ? { cap_table_shareholder: shareholderId } : {}),
             ...(invCurrencyId != null ? { currency: invCurrencyId } : {}),
@@ -545,7 +556,8 @@ export function TaskSheet({
 
   if (!task) return null
 
-  const canAct = currentUserId == null || task.owner === currentUserId || (task.assigned_to ?? []).includes(currentUserId)
+  const assignedIds = task.assigned_to ?? task.assignedTo ?? []
+  const canAct = currentUserId == null || task.owner == null || task.owner === currentUserId || assignedIds.includes(currentUserId)
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -656,8 +668,40 @@ export function TaskSheet({
           </div>
         )}
 
-        {/* Capital call payment */}
-        {task.object_type === "capital_call" && (
+        {/* Capital call payment / inject */}
+        {(task.object_type === "capital_call_settled" || (task.object_type === "capital_call" && capitalCall && (capitalCall.received_at as number | null) != null)) && capitalCall && (capitalCall.deployed_at as number | null) == null ? (
+          <div className="px-6 py-4 border-b space-y-3">
+            <p className="text-sm font-medium">Inject capital</p>
+            <div className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">
+              {capitalCall.amount != null && (
+                <span>Amount received: <span className="font-semibold text-foreground">
+                  {new Intl.NumberFormat("en-GB", { style: "currency", currency: "EUR" }).format(capitalCall.amount as number)}
+                </span></span>
+              )}
+            </div>
+            {(task.status === "done") ? (
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-green-100 text-green-700 px-3 py-1.5 text-sm font-medium">
+                <Check className="size-3.5" />
+                Capital injected
+              </div>
+            ) : (
+              <CapitalCallReceive
+                capitalCall={capitalCall as unknown as CapitalCall}
+                entityUUID={capitalCall.entity as string}
+                label="Inject funds"
+                onSuccess={() => {
+                  fetch(`/api/tasks/${task.id}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ status: "done" }),
+                  }).catch(() => {})
+                  setStatus("done")
+                  onUpdated?.({ ...task, status: "done" })
+                }}
+              />
+            )}
+          </div>
+        ) : task.object_type === "capital_call" && capitalCall && (capitalCall.received_at as number | null) == null ? (
           <div className="px-6 py-4 border-b space-y-3">
             <p className="text-sm font-medium">Capital call payment</p>
             {capitalCall && (
@@ -777,7 +821,7 @@ export function TaskSheet({
               </div>
             )}
           </div>
-        )}
+        ) : null}
 
         {/* Edit form */}
         <div className="px-6 py-5 space-y-4 flex-1">
