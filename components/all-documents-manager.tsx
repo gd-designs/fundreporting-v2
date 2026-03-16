@@ -436,7 +436,6 @@ export function AllDocumentsManager({ entities }: { entities: UnifiedEntity[] })
                   docs={docs}
                   view={view}
                   onOpen={openDoc}
-                  entityMap={entityMap}
                 />
               )
             })}
