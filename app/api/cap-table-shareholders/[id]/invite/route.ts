@@ -67,12 +67,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const base = process.env.PLATFORM_API_URL
     const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }
 
-    // Create task (owner = inviter, assigned_to = invitee)
+    // Create task (owner = invitee, assigned_to = invitee)
     const taskRes = await fetch(`${base}/task`, {
       method: "POST",
       headers,
       body: JSON.stringify({
-        owner: currentUser.id,
+        owner: checkData.user.id,
         assigned_to: [checkData.user.id],
         object_type: "cap_invite",
         object_id: id,
