@@ -37,6 +37,8 @@ export type Task = {
   created_at?: number | null
   object_type?: string | null
   object_id?: string | null
+  owner?: number | null
+  assigned_to?: number[] | null
 }
 
 const STATUS_OPTIONS = [
@@ -122,6 +124,13 @@ export function TaskSheet({
   const [cashBalanceLoading, setCashBalanceLoading] = React.useState(false)
   const [recordNewMoneyIn, setRecordNewMoneyIn] = React.useState(true)
   const [paymentSaving, setPaymentSaving] = React.useState(false)
+  const [currentUserId, setCurrentUserId] = React.useState<number | null>(null)
+
+  React.useEffect(() => {
+    fetch("/api/auth/me").then(r => r.ok ? r.json() : null).then(u => {
+      if (u?.id) setCurrentUserId(u.id)
+    }).catch(() => {})
+  }, [])
 
   // When sheet opens or task changes, sync state
   React.useEffect(() => {
@@ -536,6 +545,8 @@ export function TaskSheet({
 
   if (!task) return null
 
+  const canAct = currentUserId == null || task.owner === currentUserId || (task.assigned_to ?? []).includes(currentUserId)
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-[90vw]! overflow-y-auto flex flex-col gap-0 p-0">
@@ -564,8 +575,9 @@ export function TaskSheet({
             <button
               key={opt.value}
               type="button"
-              onClick={() => { setStatus(opt.value); setDirty(true) }}
-              className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
+              onClick={() => { if (canAct) { setStatus(opt.value); setDirty(true) } }}
+              disabled={!canAct}
+              className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                 (status || task.status) === opt.value
                   ? STATUS_COLORS[opt.value]
                   : "bg-muted text-muted-foreground hover:bg-muted/70"
@@ -663,7 +675,7 @@ export function TaskSheet({
                 Payment recorded
               </div>
             ) : !paymentOpen ? (
-              <Button size="sm" onClick={() => setPaymentOpen(true)} disabled={!capitalCall}>
+              <Button size="sm" onClick={() => setPaymentOpen(true)} disabled={!capitalCall || !canAct} title={!canAct ? "Only the assigned recipient can record this payment" : undefined}>
                 <Banknote className="size-3.5" />
                 Record payment
               </Button>
@@ -782,7 +794,7 @@ export function TaskSheet({
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label>Status</Label>
-              <Select value={status} onValueChange={v => { setStatus(v); setDirty(true) }}>
+              <Select value={status} onValueChange={v => { setStatus(v); setDirty(true) }} disabled={!canAct}>
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="Select status" />
                 </SelectTrigger>
@@ -834,7 +846,7 @@ export function TaskSheet({
             <div className="flex gap-2">
               <Button
                 onClick={handleSave}
-                disabled={saving || !dirty}
+                disabled={saving || !dirty || !canAct}
               >
                 {saving ? "Saving…" : "Save changes"}
               </Button>
@@ -842,23 +854,25 @@ export function TaskSheet({
                 <Button
                   variant="outline"
                   onClick={() => handleStatusQuickSet("done")}
-                  disabled={saving}
+                  disabled={saving || !canAct}
                 >
                   <Check className="size-3.5" />
                   Mark done
                 </Button>
               )}
             </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleDelete}
-              disabled={deleting}
-              className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-            >
-              <Trash2 className="size-3.5" />
-              {deleting ? "Deleting…" : "Delete"}
-            </Button>
+            {canAct && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+              >
+                <Trash2 className="size-3.5" />
+                {deleting ? "Deleting…" : "Delete"}
+              </Button>
+            )}
           </div>
         </div>
       </SheetContent>

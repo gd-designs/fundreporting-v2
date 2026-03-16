@@ -1026,7 +1026,7 @@ export function CapTableManager({
   }, [entityUUID]);
 
   const totalShares = entries.reduce((total, e) => {
-    const callsForE = capitalCalls.filter((c) => c.cap_table_entry === e.id);
+    const callsForE = capitalCalls.filter((c) => c.cap_table_entry === e.id && c.deployed_at != null);
     return total + callsForE.reduce((sum, c) => {
       const sc = shareClasses.find((s) => s.id === c.share_class);
       return sum + (sc?.current_nav && c.amount ? c.amount / sc.current_nav : 0);
@@ -1037,6 +1037,7 @@ export function CapTableManager({
     0,
   );
   const totalCalled = capitalCalls.reduce((s, c) => s + (c.amount ?? 0), 0);
+  const totalDeployed = capitalCalls.filter(c => c.deployed_at != null).reduce((s, c) => s + (c.amount ?? 0), 0);
   const impliedPricePerShare =
     nav !== null && totalShares > 0 ? nav / totalShares : null;
 
@@ -1250,7 +1251,9 @@ export function CapTableManager({
                       0,
                     );
                     const remaining = (entry.committed_amount ?? 0) - calledTotal;
-                    const sharesForEntry = callsForEntry.reduce((sum, c) => {
+                    const deployedCalls = callsForEntry.filter(c => c.deployed_at != null);
+                    const deployedTotal = deployedCalls.reduce((s, c) => s + (c.amount ?? 0), 0);
+                    const sharesForEntry = deployedCalls.reduce((sum, c) => {
                       const sc = shareClasses.find((s) => s.id === c.share_class);
                       return sum + (sc?.current_nav && c.amount ? c.amount / sc.current_nav : 0);
                     }, 0);
@@ -1269,8 +1272,8 @@ export function CapTableManager({
                         ? ownershipFrac * nav
                         : null;
                     const gl =
-                      calledTotal > 0 && nav !== null && nav > 0 && currentValue !== null
-                        ? currentValue - calledTotal
+                      deployedTotal > 0 && nav !== null && nav > 0 && currentValue !== null
+                        ? currentValue - deployedTotal
                         : null;
                     const expanded = expandedEntries.has(entry.id);
                     const canCall = !!sh?.user;
@@ -1433,7 +1436,7 @@ export function CapTableManager({
                                       <span
                                         className={`inline-flex items-center rounded-full px-1.5 py-0.5 font-medium ${cc.status === "paid" && cc.received_at ? "bg-emerald-100 text-emerald-800" : STATUS_BADGE[cc.status ?? "pending"]}`}
                                       >
-                                        {cc.status === "paid" && cc.received_at ? "Settled" : (cc.status ?? "pending")}
+                                        {cc.status === "paid" && cc.received_at ? "Settled" : (cc.status ? cc.status.charAt(0).toUpperCase() + cc.status.slice(1) : "Pending")}
                                       </span>
                                     </td>
                                     <td className="py-1.5 px-4 text-xs">
@@ -1531,10 +1534,10 @@ export function CapTableManager({
                     <td className="py-2 px-4 text-right tabular-nums">
                       {navLoading ? (
                         "…"
-                      ) : nav !== null && nav > 0 && totalCalled > 0 ? (
-                        <span className={nav - totalCalled >= 0 ? "text-emerald-600" : "text-destructive"}>
-                          {nav - totalCalled >= 0 ? "+" : ""}
-                          {fmtCurrency(nav - totalCalled, currencyCode)}
+                      ) : nav !== null && nav > 0 && totalDeployed > 0 ? (
+                        <span className={nav - totalDeployed >= 0 ? "text-emerald-600" : "text-destructive"}>
+                          {nav - totalDeployed >= 0 ? "+" : ""}
+                          {fmtCurrency(nav - totalDeployed, currencyCode)}
                         </span>
                       ) : (
                         "—"

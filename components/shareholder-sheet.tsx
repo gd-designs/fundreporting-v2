@@ -89,7 +89,7 @@ export function ShareholderSheet({
                     const sc = shareClasses.find(s => s.id === cc.share_class)
                     const isSettled = cc.status === "paid" && cc.received_at != null
                     const isDeployed = cc.deployed_at != null
-                    const statusLabel = isSettled ? "Settled" : (cc.status ?? "pending")
+                    const statusLabel = isSettled ? "Settled" : (cc.status ? cc.status.charAt(0).toUpperCase() + cc.status.slice(1) : "Pending")
 
                     return (
                       <div key={cc.id} className="rounded-md border p-3 space-y-2">

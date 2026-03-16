@@ -60,14 +60,21 @@ async function notifyLp(token: string, currentUserId: number, call: Record<strin
   const sh = await shRes.json() as Record<string, unknown>
   if (!sh.user || !sh.email) return
 
-  // 3. Fetch entity name
+  // 3. Fetch entity name (name lives on sub-table, not base entity record)
   let entityName = "your fund"
   if (call.entity) {
     const entityRes = await fetch(`${base}/entity/${call.entity}`, { headers })
     if (entityRes.ok) {
       const entity = await entityRes.json() as Record<string, unknown>
-      // entity name lives on sub-table; use entity id as fallback
-      entityName = (entity.name as string) ?? entityName
+      const type = entity.type as string | undefined
+      if (type) {
+        const subRes = await fetch(`${base}/${type}?entity=${call.entity}`, { headers })
+        if (subRes.ok) {
+          const subData = await subRes.json() as Array<Record<string, unknown>> | Record<string, unknown>
+          const sub = Array.isArray(subData) ? subData[0] : subData
+          if (sub?.name) entityName = sub.name as string
+        }
+      }
     }
   }
 

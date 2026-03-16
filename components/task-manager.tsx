@@ -111,6 +111,11 @@ const OBJECT_TYPE_LABELS: Record<string, string> = {
   asset: "Asset",
   fund: "Fund",
   investor_lead: "Investor Lead",
+  capital_call: "Capital Call",
+  cap_invite: "Cap Table Invite",
+  liability: "Liability",
+  document: "Document",
+  compliance_record: "Compliance",
 }
 
 const ENTITY_HREFS: Record<string, string> = {
@@ -545,6 +550,7 @@ function TaskRow({
   onEdit,
   onDelete,
   onOpen,
+  currentUserId,
 }: {
   task: Task;
   entityName: string | null;
@@ -554,9 +560,11 @@ function TaskRow({
   onEdit: (task: Task) => void;
   onDelete: (id: string) => void;
   onOpen: (task: Task) => void;
+  currentUserId: number | null;
 }) {
   const overdue = isOverdue(task.dueDate, task.status);
   const isDone = task.status === "done";
+  const canAct = currentUserId == null || task.owner === currentUserId || task.assignedTo.includes(currentUserId);
 
   return (
     <div
@@ -564,9 +572,10 @@ function TaskRow({
     >
       {/* Status toggle */}
       <button
-        onClick={(e) => { e.stopPropagation(); onStatusToggle(task); }}
-        className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-        title={isDone ? "Reopen" : "Mark done"}
+        onClick={(e) => { e.stopPropagation(); if (canAct) onStatusToggle(task); }}
+        disabled={!canAct}
+        className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        title={!canAct ? "Only the assignee can change this task" : isDone ? "Reopen" : "Mark done"}
       >
         <StatusIcon status={task.status} />
       </button>
@@ -625,7 +634,7 @@ function TaskRow({
       )}
 
       {/* Actions */}
-      <div className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+      {canAct && <div className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" className="size-7">
@@ -660,7 +669,7 @@ function TaskRow({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-      </div>
+      </div>}
     </div>
   );
 }
@@ -677,6 +686,7 @@ function StatusGroup({
   onDelete,
   onOpen,
   defaultOpen,
+  currentUserId,
 }: {
   status: TaskStatus;
   tasks: Task[];
@@ -687,6 +697,7 @@ function StatusGroup({
   onDelete: (id: string) => void;
   onOpen: (task: Task) => void;
   defaultOpen: boolean;
+  currentUserId: number | null;
 }) {
   const [open, setOpen] = React.useState(defaultOpen);
 
@@ -734,6 +745,7 @@ function StatusGroup({
                 onEdit={onEdit}
                 onDelete={onDelete}
                 onOpen={onOpen}
+                currentUserId={currentUserId}
               />
             );
           })}
@@ -1009,6 +1021,13 @@ export function TaskManager({
   const [draggingTask, setDraggingTask] = React.useState<Task | null>(null);
   const [sheetTask, setSheetTask] = React.useState<SheetTask | null>(null);
   const [sheetOpen, setSheetOpen] = React.useState(false);
+  const [currentUserId, setCurrentUserId] = React.useState<number | null>(null);
+
+  React.useEffect(() => {
+    fetch("/api/auth/me").then(r => r.ok ? r.json() : null).then(u => {
+      if (u?.id) setCurrentUserId(u.id)
+    }).catch(() => {})
+  }, [])
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
@@ -1372,6 +1391,7 @@ export function TaskManager({
                 onDelete={handleDelete}
                 onOpen={openSheet}
                 defaultOpen={status === "todo" || status === "in_progress"}
+                currentUserId={currentUserId}
               />
             ))}
           </div>
