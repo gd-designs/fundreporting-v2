@@ -44,7 +44,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json(call)
 }
 
-async function notifyLp(token: string, currentUserId: number, call: Record<string, unknown>) {
+async function notifyLp(token: string, _currentUserId: number, call: Record<string, unknown>) {
   const base = process.env.PLATFORM_API_URL!
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }
 
@@ -98,7 +98,7 @@ async function notifyLp(token: string, currentUserId: number, call: Record<strin
     method: "POST",
     headers,
     body: JSON.stringify({
-      owner: currentUserId,
+      owner: sh.user,
       assigned_to: [sh.user],
       object_type: "capital_call",
       object_id: call.id,
