@@ -658,6 +658,7 @@ function CapitalCallDialog({
   currencyCode = "EUR",
   isCommitment = false,
   shareClasses = [],
+  onCreateShareClass,
 }: {
   open: boolean;
   onClose: () => void;
@@ -670,6 +671,7 @@ function CapitalCallDialog({
   currencyCode?: string;
   isCommitment?: boolean;
   shareClasses?: ShareClass[];
+  onCreateShareClass?: () => void;
 }) {
   const [amount, setAmount] = React.useState("");
   const [status, setStatus] = React.useState("pending");
@@ -746,6 +748,24 @@ function CapitalCallDialog({
       }}
     >
       <DialogContent className="sm:max-w-sm">
+        {shareClasses.length === 0 ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>No Share Classes</DialogTitle>
+              <DialogDescription>
+                You need at least one share class before recording a capital call.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="mt-4 flex justify-end gap-2">
+              <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+              {onCreateShareClass && (
+                <Button type="button" onClick={() => { onClose(); onCreateShareClass(); }}>
+                  Create Share Class
+                </Button>
+              )}
+            </div>
+          </>
+        ) : (
         <form onSubmit={handleSubmit}>
           <DialogHeader>
             <DialogTitle>
@@ -864,6 +884,7 @@ function CapitalCallDialog({
             </Button>
           </DialogFooter>
         </form>
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -1721,6 +1742,7 @@ export function CapTableManager({
         currencyCode={currencyCode}
         isCommitment={isCommitment}
         shareClasses={shareClasses}
+        onCreateShareClass={() => setScDialog({ open: true, existing: null })}
       />
       <ShareholderSheet
         open={shSheet.open}
