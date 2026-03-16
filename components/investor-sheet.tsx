@@ -261,14 +261,14 @@ function CapitalCallDialog({
                 <Label>Share Class</Label>
                 <Select value={shareClass} onValueChange={setShareClass}>
                   <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select share class (optional)" />
+                    <SelectValue placeholder="Select share class" />
                   </SelectTrigger>
                   <SelectContent>
                     {shareClasses.map((sc) => (
                       <SelectItem key={sc.id} value={sc.id}>
                         {sc.name ?? sc.id}
-                        {sc.price_per_share != null &&
-                          ` — ${fmt(sc.price_per_share)} / share`}
+                        {sc.current_nav != null &&
+                          ` — ${fmt(sc.current_nav)} / share`}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -775,9 +775,9 @@ export function InvestorSheet({
                                         {sc ? (
                                           <>
                                             <p>{sc.name}</p>
-                                            {sc.price_per_share != null && (
+                                            {sc.current_nav != null && (
                                               <p className="opacity-70">
-                                                {fmt(sc.price_per_share)} /
+                                                {fmt(sc.current_nav)} /
                                                 share
                                               </p>
                                             )}

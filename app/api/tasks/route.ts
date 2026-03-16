@@ -7,17 +7,18 @@ export async function GET(req: NextRequest) {
 
   const entity = req.nextUrl.searchParams.get("entity")
 
-  const res = await fetch(`${process.env.PLATFORM_API_URL}/task`, {
+  const url = entity
+    ? `${process.env.PLATFORM_API_URL}/task?entity=${encodeURIComponent(entity)}`
+    : `${process.env.PLATFORM_API_URL}/task`
+
+  const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
   })
   if (!res.ok) return NextResponse.json([], { status: res.status })
 
-  let tasks = await res.json()
-  if (!Array.isArray(tasks)) tasks = []
-  if (entity) tasks = tasks.filter((t: { entity?: string }) => t.entity === entity)
-
-  return NextResponse.json(tasks)
+  const tasks = await res.json()
+  return NextResponse.json(Array.isArray(tasks) ? tasks : [])
 }
 
 export async function POST(req: NextRequest) {

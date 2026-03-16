@@ -1,4 +1,4 @@
-import { getAuthToken } from "@/lib/auth"
+import { getAuthToken, getCurrentUser } from "@/lib/auth"
 import { sendCapitalCallEmail } from "@/lib/email"
 import { type NextRequest, NextResponse } from "next/server"
 
@@ -23,8 +23,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const token = await getAuthToken()
-  if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  const [token, currentUser] = await Promise.all([getAuthToken(), getCurrentUser()])
+  if (!token || !currentUser) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
   const body = await req.json()
   const res = await fetch(`${process.env.PLATFORM_API_URL}/capital_call`, {
@@ -36,15 +36,15 @@ export async function POST(req: NextRequest) {
 
   const call = await res.json() as Record<string, unknown>
 
-  // Fire-and-forget: email + notification for the LP
+  // Fire-and-forget: task + notification for the LP
   if (call.cap_table_entry) {
-    notifyLp(token, call).catch(() => {})
+    notifyLp(token, currentUser.id, call).catch(() => {})
   }
 
   return NextResponse.json(call)
 }
 
-async function notifyLp(token: string, call: Record<string, unknown>) {
+async function notifyLp(token: string, currentUserId: number, call: Record<string, unknown>) {
   const base = process.env.PLATFORM_API_URL!
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }
 
@@ -87,7 +87,7 @@ async function notifyLp(token: string, call: Record<string, unknown>) {
     body: JSON.stringify({ notified_at: Date.now() }),
   })
 
-  // 6. Create notification for the LP user
+  // 6. Format amount / due date for task + notification
   const amount = call.amount as number | null
   const dueDate = call.due_date as number | null
   const formattedAmount = amount != null
@@ -97,6 +97,27 @@ async function notifyLp(token: string, call: Record<string, unknown>) {
     ? new Date(dueDate).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
     : null
 
+  // 7. Create task (owner = fund manager, assigned_to = LP user)
+  const taskTitle = `Capital call — ${entityName}: ${formattedAmount}${formattedDue ? ` due ${formattedDue}` : ""}`
+  const taskRes = await fetch(`${base}/task`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      owner: currentUserId,
+      assigned_to: [sh.user],
+      object_type: "capital_call",
+      object_id: call.id,
+      ...(call.entity ? { entity: call.entity } : {}),
+      title: taskTitle,
+      description: `You have a capital call of ${formattedAmount} from ${entityName}${formattedDue ? `, due ${formattedDue}` : ""}. Please complete the payment from your tasks.`,
+      status: "todo",
+      priority: "high",
+      ...(dueDate ? { due_date: dueDate } : {}),
+    }),
+  }).catch(() => null)
+  const taskData = taskRes?.ok ? await taskRes.json() as Record<string, unknown> : null
+
+  // 8. Create notification linked to task
   await fetch(`${base}/notification`, {
     method: "POST",
     headers,
@@ -104,8 +125,10 @@ async function notifyLp(token: string, call: Record<string, unknown>) {
       user: sh.user,
       type: "capital_call",
       resource_id: call.id,
+      task: taskData?.id ?? null,
       title: `Capital call — ${entityName}`,
       body: formattedDue ? `${formattedAmount} due ${formattedDue}` : formattedAmount,
+      read: false,
     }),
-  })
+  }).catch(() => {})
 }

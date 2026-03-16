@@ -78,7 +78,7 @@ const CHANGE_RANGES = [
 ] as const
 type ChangeRangeId = (typeof CHANGE_RANGES)[number]["id"]
 
-export function AssetsManager({ entityUUID, baseCurrency: baseCurrencyProp, allowNewMoneyIn = false }: { entityUUID: string; baseCurrency?: string; allowNewMoneyIn?: boolean }) {
+export function AssetsManager({ entityUUID, baseCurrency: baseCurrencyProp, allowNewMoneyIn = false, entityType }: { entityUUID: string; baseCurrency?: string; allowNewMoneyIn?: boolean; entityType?: string }) {
   const searchParams = useSearchParams()
   const [assets, setAssets] = React.useState<EntityAsset[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -462,6 +462,16 @@ export function AssetsManager({ entityUUID, baseCurrency: baseCurrencyProp, allo
     () => orderedAssets.reduce((sum, asset) => sum + getBaseValue(asset), 0),
     [orderedAssets, getBaseValue],
   )
+
+  // Cache assets value for dashboard entity cards
+  React.useEffect(() => {
+    if (loading) return
+    fetch(`/api/entity-stats/${entityUUID}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assetsValue: portfolioValue, assetsCount: orderedAssets.length }),
+    }).catch(() => {})
+  }, [loading, entityUUID, portfolioValue, orderedAssets.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectedRange = React.useMemo(
     () => CHANGE_RANGES.find((item) => item.id === changeRange) ?? CHANGE_RANGES[0],
@@ -1287,6 +1297,7 @@ export function AssetsManager({ entityUUID, baseCurrency: baseCurrencyProp, allo
                                 cashAssets={cashAssets}
                                 costBasis={currentValue}
                                 instrument={asset.instrument}
+                                allowNewMoneyIn={allowNewMoneyIn}
                                 onSuccess={() => void loadAssets()}
                               >
                                 <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
@@ -1356,7 +1367,7 @@ export function AssetsManager({ entityUUID, baseCurrency: baseCurrencyProp, allo
               Add and manage asset holdings.
             </p>
           </div>
-          <AddAssetDialog entityUUID={entityUUID} currencies={currencies} assetClasses={assetClasses} onCreated={loadAssets} allowNewMoneyIn={allowNewMoneyIn} defaultCurrencyCode={baseCurrencyProp}>
+          <AddAssetDialog entityUUID={entityUUID} currencies={currencies} assetClasses={assetClasses} onCreated={loadAssets} allowNewMoneyIn={allowNewMoneyIn} defaultCurrencyCode={baseCurrencyProp} entityType={entityType}>
             <Button>
               <Plus />
               Add asset

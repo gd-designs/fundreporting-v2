@@ -7,5 +7,5 @@ export default async function AssetsPage({ params }: { params: Promise<{ id: str
   const record = await getEntityRecord("company", id)
   if (!record) notFound()
   const currency = (record._currency as { code?: string } | null)?.code ?? (record.base_currency as string | undefined)
-  return <AssetsManager entityUUID={record.entity} baseCurrency={currency} />
+  return <AssetsManager entityUUID={record.entity} baseCurrency={currency} entityType="company" />
 }

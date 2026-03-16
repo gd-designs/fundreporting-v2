@@ -3,9 +3,7 @@ import { cookies } from "next/headers";
 import {
   ArrowRight,
   Building2,
-  FileText,
   Landmark,
-  ListTodo,
   Plus,
   Users,
   BarChart3,
@@ -24,6 +22,8 @@ import {
 import { getEntities } from "@/lib/entities";
 import { buildDashboardSnapshot } from "@/lib/dashboard";
 import type { UnifiedEntity } from "@/lib/types";
+import { DashboardTasksCard } from "@/components/dashboard-tasks-card";
+import { DashboardDocumentsCard } from "@/components/dashboard-documents-card";
 
 type MyCapitalCall = {
   id: string
@@ -288,9 +288,18 @@ export default async function DashboardPage() {
                             <p className="font-medium">
                               {row.entity.name ?? "—"}
                             </p>
-                            <p className="text-muted-foreground text-xs">
-                              {typeLabel(row.entity)}
-                            </p>
+                            <div className="flex items-center gap-1.5">
+                              <p className="text-muted-foreground text-xs">
+                                {typeLabel(row.entity)}
+                              </p>
+                              <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 capitalize">
+                                {!row.entity._role || row.entity._role === "owner"
+                                  ? "Owner"
+                                  : row.entity._role === "ubo"
+                                  ? "UBO"
+                                  : row.entity._role.replace("_", " ")}
+                              </span>
+                            </div>
                           </div>
                         </div>
                         <ArrowRight className="text-muted-foreground size-4 shrink-0" />
@@ -373,37 +382,8 @@ export default async function DashboardPage() {
               </Card>
             )}
 
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base">Tasks quick look</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <p className="text-muted-foreground text-sm">No open tasks.</p>
-                <Button asChild variant="outline" className="w-full">
-                  <Link href="/tasks">
-                    <ListTodo />
-                    View all tasks
-                  </Link>
-                </Button>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base">Recent documents</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <p className="text-muted-foreground text-sm">
-                  No documents uploaded yet.
-                </p>
-                <Button asChild variant="outline" className="w-full">
-                  <Link href="/documents">
-                    <FileText />
-                    View all documents
-                  </Link>
-                </Button>
-              </CardContent>
-            </Card>
+            <DashboardTasksCard initialTasks={snapshot.tasks} />
+            <DashboardDocumentsCard initialDocuments={snapshot.documents} />
           </div>
         </div>
       </div>

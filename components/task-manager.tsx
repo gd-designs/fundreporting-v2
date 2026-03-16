@@ -73,6 +73,7 @@ import {
   AvatarGroupCount,
   AvatarImage,
 } from "@/components/ui/avatar";
+import { TaskSheet, type Task as SheetTask } from "@/components/task-sheet";
 import {
   HoverCard,
   HoverCardContent,
@@ -543,6 +544,7 @@ function TaskRow({
   onStatusToggle,
   onEdit,
   onDelete,
+  onOpen,
 }: {
   task: Task;
   entityName: string | null;
@@ -551,6 +553,7 @@ function TaskRow({
   onStatusToggle: (task: Task) => void;
   onEdit: (task: Task) => void;
   onDelete: (id: string) => void;
+  onOpen: (task: Task) => void;
 }) {
   const overdue = isOverdue(task.dueDate, task.status);
   const isDone = task.status === "done";
@@ -561,7 +564,7 @@ function TaskRow({
     >
       {/* Status toggle */}
       <button
-        onClick={() => onStatusToggle(task)}
+        onClick={(e) => { e.stopPropagation(); onStatusToggle(task); }}
         className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground transition-colors"
         title={isDone ? "Reopen" : "Mark done"}
       >
@@ -569,7 +572,7 @@ function TaskRow({
       </button>
 
       {/* Content */}
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 cursor-pointer" onClick={() => onOpen(task)}>
         <div className="flex items-center gap-2 flex-wrap">
           <p
             className={`text-sm font-medium ${isDone ? "line-through text-muted-foreground" : ""}`}
@@ -672,6 +675,7 @@ function StatusGroup({
   onStatusToggle,
   onEdit,
   onDelete,
+  onOpen,
   defaultOpen,
 }: {
   status: TaskStatus;
@@ -681,6 +685,7 @@ function StatusGroup({
   onStatusToggle: (task: Task) => void;
   onEdit: (task: Task) => void;
   onDelete: (id: string) => void;
+  onOpen: (task: Task) => void;
   defaultOpen: boolean;
 }) {
   const [open, setOpen] = React.useState(defaultOpen);
@@ -728,6 +733,7 @@ function StatusGroup({
                 onStatusToggle={onStatusToggle}
                 onEdit={onEdit}
                 onDelete={onDelete}
+                onOpen={onOpen}
               />
             );
           })}
@@ -748,6 +754,7 @@ function KanbanCard({
   onEdit,
   onDelete,
   onMoveStatus,
+  onOpen,
 }: {
   task: Task;
   entityName: string | null;
@@ -757,6 +764,7 @@ function KanbanCard({
   onEdit: (task: Task) => void;
   onDelete: (id: string) => void;
   onMoveStatus: (task: Task, status: TaskStatus) => void;
+  onOpen: (task: Task) => void;
 }) {
   const overdue = isOverdue(task.dueDate, task.status);
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
@@ -774,7 +782,7 @@ function KanbanCard({
       className={`group rounded-lg border bg-card p-3 shadow-sm space-y-2 select-none ${
         isDragging && !overlay ? "opacity-40" : ""
       } ${overlay ? "shadow-lg rotate-1 cursor-grabbing" : "hover:shadow-md transition-shadow cursor-grab"}`}
-      onClick={() => onEdit(task)}
+      onClick={() => onOpen(task)}
     >
       <div className="flex items-start justify-between gap-1">
         <p
@@ -873,6 +881,7 @@ function KanbanColumn({
   onEdit,
   onDelete,
   onMoveStatus,
+  onOpen,
 }: {
   status: TaskStatus;
   tasks: Task[];
@@ -881,6 +890,7 @@ function KanbanColumn({
   onEdit: (task: Task) => void;
   onDelete: (id: string) => void;
   onMoveStatus: (task: Task, status: TaskStatus) => void;
+  onOpen: (task: Task) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: status });
 
@@ -916,6 +926,7 @@ function KanbanColumn({
               onEdit={onEdit}
               onDelete={onDelete}
               onMoveStatus={onMoveStatus}
+              onOpen={onOpen}
             />
           );
         })}
@@ -938,6 +949,7 @@ function KanbanBoard({
   onEdit,
   onDelete,
   onMoveStatus,
+  onOpen,
 }: {
   groupedByStatus: Record<TaskStatus, Task[]>;
   entityMap: Map<string, UnifiedEntity>;
@@ -945,6 +957,7 @@ function KanbanBoard({
   onEdit: (task: Task) => void;
   onDelete: (id: string) => void;
   onMoveStatus: (task: Task, status: TaskStatus) => void;
+  onOpen: (task: Task) => void;
 }) {
   return (
     <div className="flex gap-4 overflow-x-auto pb-4 -mx-1 px-1">
@@ -958,6 +971,7 @@ function KanbanBoard({
           onEdit={onEdit}
           onDelete={onDelete}
           onMoveStatus={onMoveStatus}
+          onOpen={onOpen}
         />
       ))}
     </div>
@@ -971,11 +985,13 @@ export function TaskManager({
   entities,
   title = "Tasks",
   description = "Open and completed tasks.",
+  openTaskId,
 }: {
   entityId?: string;
   entities?: UnifiedEntity[];
   title?: string;
   description?: string;
+  openTaskId?: string;
 }) {
   const [tasks, setTasks] = React.useState<Task[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -991,6 +1007,8 @@ export function TaskManager({
   const [editTask, setEditTask] = React.useState<Task | null>(null);
   const [objectNameMap, setObjectNameMap] = React.useState<Map<string, string>>(new Map());
   const [draggingTask, setDraggingTask] = React.useState<Task | null>(null);
+  const [sheetTask, setSheetTask] = React.useState<SheetTask | null>(null);
+  const [sheetOpen, setSheetOpen] = React.useState(false);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
@@ -1013,6 +1031,13 @@ export function TaskManager({
   React.useEffect(() => {
     void load();
   }, [entityId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Open sheet for a specific task when navigated from a notification
+  React.useEffect(() => {
+    if (!openTaskId || loading) return;
+    const task = tasks.find((t) => t.id === openTaskId);
+    if (task) openSheet(task);
+  }, [openTaskId, loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Resolve object names for tasks that have objectType + objectId
   React.useEffect(() => {
@@ -1138,6 +1163,34 @@ export function TaskManager({
   function openEdit(task: Task) {
     setEditTask(task);
     setDialogOpen(true);
+  }
+  function openSheet(task: Task) {
+    setSheetTask({
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      status: task.status,
+      priority: task.priority,
+      due_date: task.dueDate,
+      entity: task.entityId,
+      created_at: task.createdAt,
+    });
+    setSheetOpen(true);
+  }
+  function handleSheetUpdated(updated: SheetTask) {
+    setSheetTask(updated);
+    setTasks((prev) => prev.map((t) => t.id === updated.id ? {
+      ...t,
+      title: updated.title ?? t.title,
+      description: updated.description ?? null,
+      status: (updated.status as Task["status"]) ?? t.status,
+      priority: (updated.priority as Task["priority"]) ?? null,
+      dueDate: updated.due_date ?? null,
+    } : t));
+  }
+  function handleSheetDeleted(id: string) {
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+    setSheetOpen(false);
   }
 
   const openCount = tasks.filter(
@@ -1279,6 +1332,7 @@ export function TaskManager({
               onMoveStatus={handleMoveStatus}
               onEdit={openEdit}
               onDelete={handleDelete}
+              onOpen={openSheet}
             />
             <DragOverlay>
               {draggingTask ? (() => {
@@ -1298,6 +1352,7 @@ export function TaskManager({
                     onEdit={openEdit}
                     onDelete={handleDelete}
                     onMoveStatus={handleMoveStatus}
+                    onOpen={openSheet}
                   />
                 );
               })() : null}
@@ -1315,6 +1370,7 @@ export function TaskManager({
                 onStatusToggle={handleStatusToggle}
                 onEdit={openEdit}
                 onDelete={handleDelete}
+                onOpen={openSheet}
                 defaultOpen={status === "todo" || status === "in_progress"}
               />
             ))}
@@ -1329,6 +1385,14 @@ export function TaskManager({
         entities={entities}
         onClose={() => setDialogOpen(false)}
         onSaved={handleSaved}
+      />
+
+      <TaskSheet
+        task={sheetTask}
+        open={sheetOpen}
+        onOpenChange={setSheetOpen}
+        onUpdated={handleSheetUpdated}
+        onDeleted={handleSheetDeleted}
       />
     </div>
   );

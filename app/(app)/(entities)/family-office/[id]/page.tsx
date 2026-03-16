@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation"
 import { getAuthToken } from "@/lib/auth"
+import { getEntities } from "@/lib/entities"
 import { FamilyOfficeOverview } from "@/components/family-office-overview"
 
 async function getFamilyOffice(id: string) {
@@ -25,8 +26,13 @@ export default async function FamilyOfficePage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
-  const familyOffice = await getFamilyOffice(id)
+  const [familyOffice, allEntities] = await Promise.all([
+    getFamilyOffice(id),
+    getEntities(),
+  ])
   if (!familyOffice) notFound()
+
+  const allPortfolios = allEntities.filter((e) => e.type === "portfolio")
 
   return (
     <FamilyOfficeOverview
@@ -34,6 +40,7 @@ export default async function FamilyOfficePage({
       familyOfficeId={familyOffice.id}
       familyOfficeName={familyOffice.name}
       country={familyOffice._country?.name ?? null}
+      allPortfolios={allPortfolios}
     />
   )
 }

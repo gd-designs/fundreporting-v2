@@ -340,6 +340,28 @@ export function AssetManagementSheet({
             )
             .catch(() => {});
         }
+        const capSourceIds = Array.from(
+          new Set(
+            filtered.flatMap((tx) =>
+              tx.legs
+                .filter((l) => l.source === "cap" && l.sourceId)
+                .map((l) => l.sourceId!),
+            ),
+          ),
+        );
+        if (capSourceIds.length > 0) {
+          Promise.all(
+            capSourceIds.map((id) =>
+              fetch(`/api/cap-table-shareholders/${id}`)
+                .then((r) => (r.ok ? r.json() : null))
+                .then((d) => [id, d?.name ?? id] as [string, string]),
+            ),
+          )
+            .then((entries) =>
+              setSourceNameMap((prev) => new Map([...prev, ...entries])),
+            )
+            .catch(() => {});
+        }
         let netU = 0;
         for (const tx of filtered) {
           for (const leg of tx.legs) {
@@ -618,7 +640,8 @@ export function AssetManagementSheet({
     const rows: MarketRow[] = [];
     let previousValue = assetBalance;
     for (const point of sortedPoints) {
-      const delta = point.close - previousValue;
+      const eodValue = point.close * (totalUnits ?? 1);
+      const delta = eodValue - previousValue;
       rows.push({
         kind: "market",
         marketId: `eod-${point.date}`,
@@ -627,10 +650,10 @@ export function AssetManagementSheet({
         dateLabel: formatDateOnly(point.date),
         delta,
         price: point.close,
-        value: point.close,
+        value: eodValue,
         source: "eod",
       });
-      previousValue = point.close;
+      previousValue = eodValue;
     }
     if (typeof liveQuote === "number" && liveQuote > 0) {
       const liveValue = totalUnits != null ? liveQuote * totalUnits : liveQuote;
@@ -701,9 +724,16 @@ export function AssetManagementSheet({
       if (kindOrder(a.kind) !== kindOrder(b.kind))
         return kindOrder(a.kind) - kindOrder(b.kind);
       if (a.kind === "transaction" && b.kind === "transaction") {
-        const ac = a.legCreatedAt ?? a.date;
-        const bc = b.legCreatedAt ?? b.date;
-        return ac - bc;
+        // Sort by user-set transaction date first (logical order)
+        if (a.date !== b.date) return a.date - b.date;
+        // Same tx.date (same transaction): use DB creation order
+        const ac = a.legCreatedAt ?? 0;
+        const bc = b.legCreatedAt ?? 0;
+        if (ac !== bc) return ac - bc;
+        // Same creation time: "in" entries before "out"
+        const ad = a.direction === "in" ? 0 : 1;
+        const bd = b.direction === "in" ? 0 : 1;
+        return ad - bd;
       }
       return a.date - b.date;
     });
@@ -941,6 +971,25 @@ export function AssetManagementSheet({
               </div>
             </div>
 
+            {/* Shareholder card — shown when asset is linked to a cap table shareholder */}
+            {asset.shareholder && (
+              <div className="rounded-md border p-3">
+                <p className="text-muted-foreground text-xs">Shareholder</p>
+                <p className="mt-1 text-sm font-medium">{asset.shareholder.name || "—"}</p>
+                <div className="text-muted-foreground mt-1 flex flex-wrap gap-x-3 text-xs">
+                  {asset.shareholder.entityName && (
+                    <span>{asset.shareholder.entityName}</span>
+                  )}
+                  {asset.shareholder.email && (
+                    <span>{asset.shareholder.email}</span>
+                  )}
+                  {asset.shareholder.role && (
+                    <span className="capitalize">{asset.shareholder.role.replace(/_/g, " ")}</span>
+                  )}
+                </div>
+              </div>
+            )}
+
             <div
               className={`grid gap-3 ${isCashAsset ? "md:grid-cols-2" : "md:grid-cols-4"}`}
             >
@@ -987,7 +1036,7 @@ export function AssetManagementSheet({
               {/* Quantity — hidden for cash */}
               {!isCashAsset && (
                 <div className="rounded-md border p-3">
-                  <p className="text-muted-foreground text-xs">Quantity</p>
+                  <p className="text-muted-foreground text-xs">{asset.shareholder ? "Shares" : "Quantity"}</p>
                   {txLoading ? (
                     <Skeleton className="mt-1 h-5 w-16" />
                   ) : (

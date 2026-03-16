@@ -122,17 +122,22 @@ function getMetaChips(entity: UnifiedEntity): MetaChip[] {
     case "company":
       return [
         { label: "Industry", value: entity.industry ?? "—" },
-        { label: "Country", value: String(entity.country ?? "—") },
+        { label: "Country", value: entity._country?.name ?? "—" },
+        { label: "Currency", value: entity._currency?.code ?? "—" },
       ]
     case "family_office":
-      return [{ label: "Country", value: String(entity.country ?? "—") }]
+      return [
+        { label: "Country", value: entity._country?.name ?? "—" },
+        { label: "Currency", value: entity._currency?.code ?? "—" },
+      ]
     case "asset_manager":
       return [
         {
           label: "AUM",
           value: entity.aum != null ? formatAUM(entity.aum) : "—",
         },
-        { label: "Country", value: String(entity.country ?? "—") },
+        { label: "Country", value: entity._country?.name ?? "—" },
+        { label: "Currency", value: entity._currency?.code ?? "—" },
       ]
     case "fund":
       return [
@@ -184,7 +189,7 @@ function EntityCard({ entity }: { entity: UnifiedEntity }) {
         "hover:border-ring/50 hover:shadow-md"
       )}
     >
-      {/* Top row: icon + type label + arrow */}
+      {/* Top row: icon + type label + role badge + arrow */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-2.5">
           <div className={cn("flex shrink-0 items-center justify-center rounded-lg p-2", config.color)}>
@@ -192,6 +197,13 @@ function EntityCard({ entity }: { entity: UnifiedEntity }) {
           </div>
           <span className="text-xs font-medium text-muted-foreground">
             {config.label}
+          </span>
+          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 capitalize">
+            {!entity._role || entity._role === "owner"
+              ? "Owner"
+              : entity._role === "ubo"
+              ? "UBO"
+              : entity._role.replace("_", " ")}
           </span>
         </div>
         <ArrowUpRight className="size-4 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-foreground" />

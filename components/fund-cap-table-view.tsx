@@ -120,8 +120,8 @@ export function FundCapTableView({
                     {sc.voting_rights && (
                       <span className="text-xs bg-muted text-muted-foreground px-1.5 py-0.5 rounded">Voting</span>
                     )}
-                    {sc.price_per_share != null && (
-                      <span className="text-xs text-muted-foreground">{fmtCurrency(sc.price_per_share, currencyCode)} / share</span>
+                    {sc.current_nav != null && (
+                      <span className="text-xs text-muted-foreground">{fmtCurrency(sc.current_nav, currencyCode)} / share</span>
                     )}
                   </div>
                 ))}

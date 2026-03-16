@@ -378,6 +378,7 @@ type Props = {
   onCreated: () => void;
   allowNewMoneyIn?: boolean;
   defaultCurrencyCode?: string;
+  entityType?: string;
 };
 
 export function AddAssetDialog({
@@ -388,6 +389,7 @@ export function AddAssetDialog({
   onCreated,
   allowNewMoneyIn = false,
   defaultCurrencyCode,
+  entityType,
 }: Props) {
   const [open, setOpen] = React.useState(false);
   const [step, setStep] = React.useState(1);
@@ -489,10 +491,12 @@ export function AddAssetDialog({
   );
 
   // Step 3 — funding
+  const requiresCapitalCheck = !allowNewMoneyIn;
   const [cashAssets, setCashAssets] = React.useState<
     Array<{ id: string; name: string | null; currency: number | null }>
   >([]);
   const [cashAssetId, setCashAssetId] = React.useState("");
+  const [cashBalances, setCashBalances] = React.useState<Map<string, number>>(new Map());
   const [createNewCashAccount, setCreateNewCashAccount] = React.useState(false);
   const [recordNewMoneyIn, setRecordNewMoneyIn] = React.useState(true);
   const [fundingSource, setFundingSource] =
@@ -613,6 +617,30 @@ export function AddAssetDialog({
 
   // ── Validation ───────────────────────────────────────────────────────────────
 
+  // For companies: cash balance must cover the purchase amount
+  const selectedCashBalance = cashAssetId ? (cashBalances.get(cashAssetId) ?? 0) : 0;
+  const insufficientCashBalance =
+    requiresCapitalCheck &&
+    fundingSource === "own_funds" &&
+    !!cashAssetId &&
+    !needsNewCashAccount &&
+    Number(purchaseAmount) > 0 &&
+    selectedCashBalance < Number(purchaseAmount);
+
+  // Portfolio split funding: when "deplete cash balance" is selected but balance is short,
+  // auto-split by recording new money in for the shortfall, then cash out the full amount.
+  const splitAmount =
+    allowNewMoneyIn &&
+    !recordNewMoneyIn &&
+    !needsNewCashAccount &&
+    !!cashAssetId &&
+    selectedCashBalance >= 0 &&
+    Number(purchaseAmount) > 0 &&
+    selectedCashBalance < Number(purchaseAmount)
+      ? Number(purchaseAmount) - selectedCashBalance
+      : 0;
+  const needsSplit = splitAmount > 0;
+
   const canContinueStep2 = isLiveTicker
     ? !!selectedTicker && !!purchasedAt
     : !!assetClassId &&
@@ -627,10 +655,14 @@ export function AddAssetDialog({
       !!currencyId &&
       name.trim().length > 0 &&
       !!fundingSource &&
+      !insufficientCashBalance &&
+      !(requiresCapitalCheck && needsNewCashAccount) &&
       (fundingSource === "leveraged"
         ? !!loanName.trim() && !!loanStartAt && !!schedules && !!selectedScheme
         : !!cashAssetId || createNewCashAccount || needsNewCashAccount)
     : !!fundingSource &&
+      !insufficientCashBalance &&
+      !(requiresCapitalCheck && needsNewCashAccount) &&
       (fundingSource !== "leveraged" ||
         (!!loanName.trim() &&
           !!loanStartAt &&
@@ -770,31 +802,50 @@ export function AddAssetDialog({
   // Fetch cash assets when entering funding step (both manual and live ticker)
   React.useEffect(() => {
     if (step !== 3) return;
-    fetch(`/api/assets?entity=${entityUUID}`)
+    const cashClassIds = new Set(
+      assetClasses
+        .filter((c) => c.name.toLowerCase().includes("cash"))
+        .map((c) => c.id),
+    );
+
+    const fetchAssets = fetch(`/api/assets?entity=${entityUUID}`)
       .then((r) => (r.ok ? r.json() : []))
-      .then(
-        (
-          all: Array<{
-            id: string;
-            name: string | null;
-            asset_class: number | null;
-            currency: number | null;
-          }>,
-        ) => {
-          const cashClassIds = new Set(
-            assetClasses
-              .filter((c) => c.name.toLowerCase().includes("cash"))
-              .map((c) => c.id),
-          );
-          setCashAssets(
-            all.filter(
-              (a) => a.asset_class != null && cashClassIds.has(a.asset_class),
-            ),
-          );
-        },
-      )
-      .catch(() => {});
-  }, [step, entityUUID, assetClasses]);
+      .then((all: Array<{ id: string; name: string | null; asset_class: number | null; currency: number | null }>) =>
+        all.filter((a) => a.asset_class != null && cashClassIds.has(a.asset_class))
+      );
+
+    if (requiresCapitalCheck) {
+      // For companies, also compute cash account balances from transaction entries + mutations
+      Promise.all([
+        fetchAssets,
+        fetch(`/api/transaction-entries?entity=${entityUUID}`).then((r) => r.ok ? r.json() : { entries: [] }).catch(() => ({ entries: [] })),
+        fetch(`/api/mutations?entity=${entityUUID}`).then((r) => r.ok ? r.json() : []).catch(() => []),
+      ]).then(([assets, entriesPayload, mutationsData]: [typeof cashAssets, { entries?: unknown[] }, Array<Record<string, unknown>>]) => {
+        setCashAssets(assets);
+        const cashIds = new Set(assets.map((a) => a.id));
+        const balances = new Map<string, number>();
+        const rawEntries = Array.isArray((entriesPayload as { entries?: unknown[] }).entries)
+          ? (entriesPayload as { entries: Record<string, unknown>[] }).entries
+          : [];
+        for (const e of rawEntries) {
+          const assetId = typeof e.asset === "string" ? e.asset : typeof e.object_id === "string" && e.object_type === "asset" ? e.object_id : null;
+          if (!assetId || !cashIds.has(assetId)) continue;
+          const dir = e.direction === "in" ? 1 : -1;
+          const amount = typeof e.amount === "number" ? e.amount : 0;
+          balances.set(assetId, (balances.get(assetId) ?? 0) + dir * amount);
+        }
+        for (const m of mutationsData) {
+          const assetId = typeof m.asset === "string" ? m.asset : null;
+          if (!assetId || !cashIds.has(assetId)) continue;
+          const delta = typeof m.delta === "number" ? m.delta : 0;
+          balances.set(assetId, (balances.get(assetId) ?? 0) + delta);
+        }
+        setCashBalances(balances);
+      }).catch(() => {});
+    } else {
+      fetchAssets.then(setCashAssets).catch(() => {});
+    }
+  }, [step, entityUUID, assetClasses, requiresCapitalCheck]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Navigation ────────────────────────────────────────────────────────────────
 
@@ -1213,6 +1264,7 @@ export function AddAssetDialog({
                 object_id: resolvedRemainderCashAssetId,
                 direction: "in",
                 amount: loanRemainder,
+                source: "new_money_in",
               });
             }
             await postEntry({
@@ -1221,6 +1273,8 @@ export function AddAssetDialog({
               object_id: resolvedRemainderCashAssetId,
               direction: "out",
               amount: loanRemainder,
+              source: "asset",
+              source_id: assetId,
             });
           }
         } else if (!isCashClass && resolvedCashAssetId && txAmount > 0) {
@@ -1246,18 +1300,20 @@ export function AddAssetDialog({
             ...(txQty > 0 && { units: txQty }),
             ...(txRate > 0 && { price_per_unit: txRate }),
             ...(assetTxAmount > 0 && { amount: assetTxAmount }),
+            source: "new_money_in",
           });
         }
 
         if (!isCashClass && resolvedCashAssetId && txAmount > 0 && fundingSource !== "leveraged") {
           // Cash legs (non-leveraged, non-cash assets only)
-          if (needsNewCashAccount || (!isLiveTicker && recordNewMoneyIn)) {
+          if (needsNewCashAccount || recordNewMoneyIn || needsSplit) {
             await postEntry({
               entry_type: "cash",
               object_type: "asset",
               object_id: resolvedCashAssetId,
               direction: "in",
-              amount: txAmount,
+              amount: needsSplit ? splitAmount : txAmount,
+              source: "new_money_in",
             });
           }
           await postEntry({
@@ -1266,6 +1322,8 @@ export function AddAssetDialog({
             object_id: resolvedCashAssetId,
             direction: "out",
             amount: txAmount,
+            source: "asset",
+            source_id: assetId,
           });
         }
       }
@@ -1742,14 +1800,25 @@ export function AddAssetDialog({
                 {fundingSource === "own_funds" && (
                   <>
                     {showNewCashAccountNotice ? (
-                      <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 p-3 text-sm">
-                        <p className="font-medium text-amber-800 dark:text-amber-300">
-                          No {selectedCurrencyCode} cash account found
-                        </p>
-                        <p className="text-amber-700 dark:text-amber-400 text-xs mt-0.5">
-                          A new {selectedCurrencyCode} cash account will be created automatically and the purchase amount will be recorded as new money in.
-                        </p>
-                      </div>
+                      requiresCapitalCheck ? (
+                        <div className="rounded-md border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/30 p-3 text-sm">
+                          <p className="font-medium text-red-800 dark:text-red-300">
+                            No {selectedCurrencyCode} cash account — capital required
+                          </p>
+                          <p className="text-red-700 dark:text-red-400 text-xs mt-0.5">
+                            Add shareholders via the Cap table first to inject capital into this company before investing.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 p-3 text-sm">
+                          <p className="font-medium text-amber-800 dark:text-amber-300">
+                            No {selectedCurrencyCode} cash account found
+                          </p>
+                          <p className="text-amber-700 dark:text-amber-400 text-xs mt-0.5">
+                            A new {selectedCurrencyCode} cash account will be created automatically and the purchase amount will be recorded as new money in.
+                          </p>
+                        </div>
+                      )
                     ) : (
                       <Field>
                         <FieldLabel>Cash / bank account</FieldLabel>
@@ -1774,6 +1843,17 @@ export function AddAssetDialog({
                       </Field>
                     )}
 
+                    {insufficientCashBalance && (
+                      <div className="rounded-md border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/30 p-3 text-sm">
+                        <p className="font-medium text-red-800 dark:text-red-300">
+                          Insufficient capital
+                        </p>
+                        <p className="text-red-700 dark:text-red-400 text-xs mt-0.5">
+                          Cash balance ({selectedCurrencyCode} {selectedCashBalance.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) is less than the purchase amount. Add shareholders via the Cap table to inject more capital first.
+                        </p>
+                      </div>
+                    )}
+
                     {cashAssetId && !needsNewCashAccount && allowNewMoneyIn && (
                       <div className="flex items-center justify-between rounded-lg border p-3">
                         <div className="grid gap-0.5">
@@ -1792,6 +1872,16 @@ export function AddAssetDialog({
                           checked={recordNewMoneyIn}
                           onCheckedChange={setRecordNewMoneyIn}
                         />
+                      </div>
+                    )}
+
+                    {needsSplit && (
+                      <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 p-3 text-sm">
+                        <p className="font-medium text-amber-800 dark:text-amber-300">Split funding</p>
+                        <p className="text-amber-700 dark:text-amber-400 text-xs mt-0.5">
+                          Cash balance ({selectedCurrencyCode} {selectedCashBalance.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) is less than the purchase amount.{" "}
+                          {selectedCurrencyCode} {splitAmount.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} will be recorded as new money in to cover the shortfall.
+                        </p>
                       </div>
                     )}
                   </>
@@ -1982,14 +2072,25 @@ export function AddAssetDialog({
                 {fundingSource === "own_funds" && (
                   <>
                     {showNewCashAccountNotice ? (
-                      <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 p-3 text-sm">
-                        <p className="font-medium text-amber-800 dark:text-amber-300">
-                          No {selectedCurrencyCode} cash account found
-                        </p>
-                        <p className="text-amber-700 dark:text-amber-400 text-xs mt-0.5">
-                          A new {selectedCurrencyCode} cash account will be created automatically and the purchase amount will be recorded as new money in.
-                        </p>
-                      </div>
+                      requiresCapitalCheck ? (
+                        <div className="rounded-md border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/30 p-3 text-sm">
+                          <p className="font-medium text-red-800 dark:text-red-300">
+                            No {selectedCurrencyCode} cash account — capital required
+                          </p>
+                          <p className="text-red-700 dark:text-red-400 text-xs mt-0.5">
+                            Add shareholders via the Cap table first to inject capital into this company before investing.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 p-3 text-sm">
+                          <p className="font-medium text-amber-800 dark:text-amber-300">
+                            No {selectedCurrencyCode} cash account found
+                          </p>
+                          <p className="text-amber-700 dark:text-amber-400 text-xs mt-0.5">
+                            A new {selectedCurrencyCode} cash account will be created automatically and the purchase amount will be recorded as new money in.
+                          </p>
+                        </div>
+                      )
                     ) : (
                       <Field>
                         <FieldLabel>Cash / bank account</FieldLabel>
@@ -2014,6 +2115,17 @@ export function AddAssetDialog({
                       </Field>
                     )}
 
+                    {insufficientCashBalance && (
+                      <div className="rounded-md border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/30 p-3 text-sm">
+                        <p className="font-medium text-red-800 dark:text-red-300">
+                          Insufficient capital
+                        </p>
+                        <p className="text-red-700 dark:text-red-400 text-xs mt-0.5">
+                          Cash balance ({selectedCurrencyCode} {selectedCashBalance.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) is less than the purchase amount. Add shareholders via the Cap table to inject more capital first.
+                        </p>
+                      </div>
+                    )}
+
                     {cashAssetId && !needsNewCashAccount && allowNewMoneyIn && (
                       <div className="flex items-center justify-between rounded-lg border p-3">
                         <div className="grid gap-0.5">
@@ -2032,6 +2144,16 @@ export function AddAssetDialog({
                           checked={recordNewMoneyIn}
                           onCheckedChange={setRecordNewMoneyIn}
                         />
+                      </div>
+                    )}
+
+                    {needsSplit && (
+                      <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 p-3 text-sm">
+                        <p className="font-medium text-amber-800 dark:text-amber-300">Split funding</p>
+                        <p className="text-amber-700 dark:text-amber-400 text-xs mt-0.5">
+                          Cash balance ({selectedCurrencyCode} {selectedCashBalance.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) is less than the purchase amount.{" "}
+                          {selectedCurrencyCode} {splitAmount.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} will be recorded as new money in to cover the shortfall.
+                        </p>
                       </div>
                     )}
                   </>

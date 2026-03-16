@@ -416,7 +416,7 @@ function InvestorsTable({
                         )}
                         {sc && (
                           <p className="opacity-70">
-                            {sc.name}{sc.price_per_share != null && ` — ${fmt(sc.price_per_share)} / share`}
+                            {sc.name}{sc.current_nav != null && ` — ${fmt(sc.current_nav)} / share`}
                           </p>
                         )}
                       </td>

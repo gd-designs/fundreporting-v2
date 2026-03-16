@@ -9,13 +9,10 @@ import {
   LayoutGrid,
   LayoutList,
   Paperclip,
-  Pencil,
   Search,
 } from "lucide-react"
-import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Textarea } from "@/components/ui/textarea"
 import {
   Select,
   SelectContent,
@@ -23,17 +20,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
-import { formatFileSize, patchDocument, type EntityDocument } from "@/lib/documents"
+import { formatFileSize, type EntityDocument } from "@/lib/documents"
 import type { UnifiedEntity } from "@/lib/types"
+import { DocumentSheet } from "@/components/document-sheet"
 
 // ─── Config ────────────────────────────────────────────────────────────────
 
@@ -86,88 +76,28 @@ function formatDate(ts: number) {
   return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" }).format(new Date(ts))
 }
 
-// ─── Edit dialog ────────────────────────────────────────────────────────────
-
-function EditDocDialog({
-  doc,
-  onClose,
-  onSaved,
-}: {
-  doc: EntityDocument | null
-  onClose: () => void
-  onSaved: () => void
-}) {
-  const [name, setName] = React.useState("")
-  const [desc, setDesc] = React.useState("")
-  const [saving, setSaving] = React.useState(false)
-  const [error, setError] = React.useState<string | null>(null)
-
-  React.useEffect(() => {
-    if (doc) { setName(doc.name); setDesc(doc.description ?? ""); setError(null) }
-  }, [doc])
-
-  async function handleSave() {
-    if (!doc) return
-    setSaving(true)
-    setError(null)
-    try {
-      await patchDocument(doc.id, { name: name.trim(), description: desc.trim() || null })
-      onSaved()
-      onClose()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save.")
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <Dialog open={!!doc} onOpenChange={(o) => { if (!o) onClose() }}>
-      <DialogContent className="max-w-sm">
-        <DialogHeader>
-          <DialogTitle>Edit document</DialogTitle>
-        </DialogHeader>
-        <FieldGroup className="py-2">
-          <Field>
-            <FieldLabel>Name</FieldLabel>
-            <Input value={name} onChange={(e) => setName(e.target.value)} />
-          </Field>
-          <Field>
-            <FieldLabel>Description</FieldLabel>
-            <Textarea value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Optional" />
-          </Field>
-          {error && <FieldError>{error}</FieldError>}
-        </FieldGroup>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button disabled={saving || !name.trim()} onClick={handleSave}>
-            {saving ? "Saving…" : "Save"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 // ─── Row ─────────────────────────────────────────────────────────────────────
 
 function DocRow({
   doc,
   basePath,
   entityName,
-  onEdit,
+  onOpen,
 }: {
   doc: EntityDocument
   basePath: string | null
   entityName: string | null
-  onEdit: (doc: EntityDocument) => void
+  onOpen: (id: string) => void
 }) {
   const href = basePath ? getObjectHref(basePath, doc.objectType, doc.objectId) : null
   const badge = OBJECT_TYPE_BADGE[doc.objectType] ?? OBJECT_TYPE_BADGE.document
   const label = OBJECT_TYPE_LABEL[doc.objectType] ?? doc.objectType
 
   return (
-    <div className="flex items-center gap-3 rounded-md border px-4 py-3 hover:bg-muted/20">
+    <div
+      className="flex items-center gap-3 rounded-md border px-4 py-3 hover:bg-muted/20 cursor-pointer"
+      onClick={() => onOpen(doc.id)}
+    >
       <Paperclip className="size-4 shrink-0 text-muted-foreground" />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 flex-wrap">
@@ -189,27 +119,16 @@ function DocRow({
           {formatDate(doc.createdAt)}
         </p>
       </div>
-      <div className="flex items-center gap-2 shrink-0">
-        {href && (
-          <Link href={href} className="text-muted-foreground hover:text-foreground" title={`Go to ${label}`}>
-            <ExternalLink className="size-3.5" />
-          </Link>
-        )}
-        <button onClick={() => onEdit(doc)} className="text-muted-foreground hover:text-foreground">
-          <Pencil className="size-3.5" />
-        </button>
-        {doc.file?.url && (
-          <a
-            href={doc.file.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-muted-foreground hover:text-foreground"
-            title="Open file"
-          >
-            <FileText className="size-3.5" />
-          </a>
-        )}
-      </div>
+      {href && (
+        <Link
+          href={href}
+          className="text-muted-foreground hover:text-foreground shrink-0"
+          title={`Go to ${label}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <ExternalLink className="size-3.5" />
+        </Link>
+      )}
     </div>
   )
 }
@@ -220,19 +139,22 @@ function DocCard({
   doc,
   basePath,
   entityName,
-  onEdit,
+  onOpen,
 }: {
   doc: EntityDocument
   basePath: string | null
   entityName: string | null
-  onEdit: (doc: EntityDocument) => void
+  onOpen: (id: string) => void
 }) {
   const href = basePath ? getObjectHref(basePath, doc.objectType, doc.objectId) : null
   const badge = OBJECT_TYPE_BADGE[doc.objectType] ?? OBJECT_TYPE_BADGE.document
   const label = OBJECT_TYPE_LABEL[doc.objectType] ?? doc.objectType
 
   return (
-    <div className="flex flex-col gap-2 rounded-md border p-4 hover:bg-muted/20">
+    <div
+      className="flex flex-col gap-2 rounded-md border p-4 hover:bg-muted/20 cursor-pointer"
+      onClick={() => onOpen(doc.id)}
+    >
       <div className="flex items-start justify-between gap-2">
         <FileText className="size-5 shrink-0 text-muted-foreground mt-0.5" />
         <div className="flex gap-1 flex-wrap justify-end">
@@ -256,23 +178,17 @@ function DocCard({
         {doc.file ? formatFileSize(doc.file.size) + " · " : ""}
         {formatDate(doc.createdAt)}
       </p>
-      <div className="flex items-center gap-2 pt-1 border-t">
-        {href && (
-          <Link href={href} className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1">
+      {href && (
+        <div className="pt-1 border-t">
+          <Link
+            href={href}
+            className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+            onClick={(e) => e.stopPropagation()}
+          >
             <ExternalLink className="size-3" /> View {label}
           </Link>
-        )}
-        <div className="ml-auto flex items-center gap-2">
-          <button onClick={() => onEdit(doc)} className="text-muted-foreground hover:text-foreground">
-            <Pencil className="size-3.5" />
-          </button>
-          {doc.file?.url && (
-            <a href={doc.file.url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground hover:text-foreground">
-              <FileText className="size-3.5" />
-            </a>
-          )}
         </div>
-      </div>
+      )}
     </div>
   )
 }
@@ -283,14 +199,12 @@ function EntityGroup({
   entity,
   docs,
   view,
-  onEdit,
-  entityMap,
+  onOpen,
 }: {
   entity: UnifiedEntity
   docs: EntityDocument[]
   view: "list" | "grid"
-  onEdit: (doc: EntityDocument) => void
-  entityMap: Map<string, UnifiedEntity>
+  onOpen: (id: string) => void
 }) {
   const basePath = entity ? `${ENTITY_HREFS[entity.type] ?? ""}/${entity.id}` : null
   const entityName = entity?.name ?? null
@@ -304,13 +218,13 @@ function EntityGroup({
       {view === "list" ? (
         <div className="space-y-1.5">
           {docs.map((doc) => (
-            <DocRow key={doc.id} doc={doc} basePath={basePath} entityName={null} onEdit={onEdit} />
+            <DocRow key={doc.id} doc={doc} basePath={basePath} entityName={null} onOpen={onOpen} />
           ))}
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
           {docs.map((doc) => (
-            <DocCard key={doc.id} doc={doc} basePath={basePath} entityName={null} onEdit={onEdit} />
+            <DocCard key={doc.id} doc={doc} basePath={basePath} entityName={null} onOpen={onOpen} />
           ))}
         </div>
       )}
@@ -328,7 +242,13 @@ export function AllDocumentsManager({ entities }: { entities: UnifiedEntity[] })
   const [sort, setSort] = React.useState<"newest" | "oldest" | "name">("newest")
   const [view, setView] = React.useState<"list" | "grid">("list")
   const [groupByEntity, setGroupByEntity] = React.useState(false)
-  const [editDoc, setEditDoc] = React.useState<EntityDocument | null>(null)
+  const [selectedDocId, setSelectedDocId] = React.useState<string | null>(null)
+  const [sheetOpen, setSheetOpen] = React.useState(false)
+
+  function openDoc(id: string) {
+    setSelectedDocId(id)
+    setSheetOpen(true)
+  }
 
   const entityMap = React.useMemo(
     () => new Map(entities.map((e) => [e.entity, e])),
@@ -515,7 +435,7 @@ export function AllDocumentsManager({ entities }: { entities: UnifiedEntity[] })
                   entity={entity}
                   docs={docs}
                   view={view}
-                  onEdit={setEditDoc}
+                  onOpen={openDoc}
                   entityMap={entityMap}
                 />
               )
@@ -532,7 +452,7 @@ export function AllDocumentsManager({ entities }: { entities: UnifiedEntity[] })
                   doc={doc}
                   basePath={basePath}
                   entityName={entity?.name ?? null}
-                  onEdit={setEditDoc}
+                  onOpen={openDoc}
                 />
               )
             })}
@@ -548,7 +468,7 @@ export function AllDocumentsManager({ entities }: { entities: UnifiedEntity[] })
                   doc={doc}
                   basePath={basePath}
                   entityName={entity?.name ?? null}
-                  onEdit={setEditDoc}
+                  onOpen={openDoc}
                 />
               )
             })}
@@ -556,7 +476,13 @@ export function AllDocumentsManager({ entities }: { entities: UnifiedEntity[] })
         )}
       </div>
 
-      <EditDocDialog doc={editDoc} onClose={() => setEditDoc(null)} onSaved={load} />
+      <DocumentSheet
+        documentId={selectedDocId}
+        open={sheetOpen}
+        onOpenChange={setSheetOpen}
+        onUpdated={load}
+        onDeleted={() => { setSheetOpen(false); void load() }}
+      />
     </div>
   )
 }

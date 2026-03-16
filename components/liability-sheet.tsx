@@ -29,6 +29,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Tooltip,
   TooltipContent,
@@ -230,11 +238,13 @@ function SchemeCard({
 function RecordPaymentDialog({
   period,
   liability,
+  allowNewMoneyIn = false,
   onClose,
   onSuccess,
 }: {
   period: Period;
   liability: Liability;
+  allowNewMoneyIn?: boolean;
   onClose: () => void;
   onSuccess: () => void;
 }) {
@@ -244,8 +254,76 @@ function RecordPaymentDialog({
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
+  // Cash account state
+  const [cashAssets, setCashAssets] = React.useState<Array<{ id: string; name: string | null }>>([]);
+  const [cashAssetId, setCashAssetId] = React.useState("");
+  const [cashBalances, setCashBalances] = React.useState<Map<string, number>>(new Map());
+  const [recordNewMoneyIn, setRecordNewMoneyIn] = React.useState(allowNewMoneyIn);
+
+  // Fetch cash assets + balances on open
+  React.useEffect(() => {
+    async function loadCash() {
+      try {
+        const [assetsRes, classesRes, entriesRes, mutationsRes] = await Promise.all([
+          fetch(`/api/assets?entity=${liability.entity}`).then((r) => r.ok ? r.json() : []),
+          fetch("/api/asset-classes").then((r) => r.ok ? r.json() : []),
+          fetch(`/api/transaction-entries?entity=${liability.entity}`).then((r) => r.ok ? r.json() : { entries: [] }),
+          fetch(`/api/mutations?entity=${liability.entity}`).then((r) => r.ok ? r.json() : []),
+        ]);
+        const cashClassIds = new Set(
+          (classesRes as Array<{ id: number; name: string }>)
+            .filter((c) => c.name.toLowerCase().includes("cash"))
+            .map((c) => c.id)
+        );
+        const cash = (assetsRes as Array<{ id: string; name: string | null; asset_class: number | null }>)
+          .filter((a) => a.asset_class != null && cashClassIds.has(a.asset_class));
+        setCashAssets(cash);
+
+        // Compute balances
+        const cashIds = new Set(cash.map((a) => a.id));
+        const balances = new Map<string, number>();
+        const rawEntries = Array.isArray((entriesRes as { entries?: unknown[] }).entries)
+          ? (entriesRes as { entries: Record<string, unknown>[] }).entries
+          : [];
+        for (const e of rawEntries) {
+          const assetId = typeof e.asset === "string" ? e.asset
+            : typeof e.object_id === "string" && e.object_type === "asset" ? e.object_id : null;
+          if (!assetId || !cashIds.has(assetId)) continue;
+          const dir = e.direction === "in" ? 1 : -1;
+          const amount = typeof e.amount === "number" ? e.amount : 0;
+          balances.set(assetId, (balances.get(assetId) ?? 0) + dir * amount);
+        }
+        for (const m of (mutationsRes as Array<Record<string, unknown>>)) {
+          const assetId = typeof m.asset === "string" ? m.asset : null;
+          if (!assetId || !cashIds.has(assetId)) continue;
+          const delta = typeof m.delta === "number" ? m.delta : 0;
+          balances.set(assetId, (balances.get(assetId) ?? 0) + delta);
+        }
+        setCashBalances(balances);
+
+        // Auto-select if only one option
+        if (cash.length === 1) setCashAssetId(cash[0].id);
+      } catch { /* silently fail */ }
+    }
+    void loadCash();
+  }, [liability.entity]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const selectedBalance = cashAssetId ? (cashBalances.get(cashAssetId) ?? 0) : 0;
+  const insufficientBalance = !allowNewMoneyIn && !!cashAssetId && !recordNewMoneyIn && selectedBalance < period.payment;
+  const splitAmount =
+    allowNewMoneyIn &&
+    !recordNewMoneyIn &&
+    !!cashAssetId &&
+    selectedBalance >= 0 &&
+    selectedBalance < period.payment
+      ? period.payment - selectedBalance
+      : 0;
+  const needsSplit = splitAmount > 0;
+  const canSubmit = !!cashAssetId && !insufficientBalance;
+
   async function handleSubmit(e: React.SyntheticEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (!canSubmit) return;
     setSaving(true);
     setError(null);
     try {
@@ -262,21 +340,55 @@ function RecordPaymentDialog({
       if (!txRes.ok) throw new Error("Failed to create transaction");
       const txData = (await txRes.json()) as { id: string };
 
+      const base = {
+        transaction: txData.id,
+        entity: liability.entity,
+        source: "loan_scheme",
+      };
+
+      // If portfolio recording new money in (or split funding): credit the cash account first
+      if (allowNewMoneyIn && (recordNewMoneyIn || needsSplit)) {
+        const moneyInRes = await fetch("/api/transaction-entries", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...base,
+            entry_type: "cash",
+            object_type: "asset",
+            object_id: cashAssetId,
+            direction: "in",
+            amount: needsSplit ? splitAmount : period.payment,
+          }),
+        });
+        if (!moneyInRes.ok) throw new Error("Failed to record money-in entry");
+      }
+
+      // Cash debit — payment leaves the cash account
+      const cashRes = await fetch("/api/transaction-entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...base,
+          entry_type: "cash",
+          object_type: "asset",
+          object_id: cashAssetId,
+          direction: "out",
+          amount: period.payment,
+        }),
+      });
+      if (!cashRes.ok) throw new Error("Failed to record cash entry");
+
       // Principal repayment entry
-      const principalAmount = period.principal;
-      const interestAmount = period.interest;
       const entryRes = await fetch("/api/transaction-entries", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          transaction: txData.id,
+          ...base,
           entry_type: "principal",
-          entity: liability.entity,
           object_type: "liability",
           object_id: liability.id,
-          source: "loan_scheme",
           direction: "out",
-          amount: principalAmount,
+          amount: period.principal,
         }),
       });
       if (!entryRes.ok) throw new Error("Failed to record principal entry");
@@ -286,17 +398,16 @@ function RecordPaymentDialog({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          transaction: txData.id,
+          ...base,
           entry_type: "interest",
-          entity: liability.entity,
           object_type: "liability",
           object_id: liability.id,
-          source: "loan_scheme",
           direction: "in",
-          amount: interestAmount,
+          amount: period.interest,
         }),
       });
       if (!interestRes.ok) throw new Error("Failed to record interest entry");
+
       onSuccess();
       onClose();
     } catch (e) {
@@ -335,9 +446,7 @@ function RecordPaymentDialog({
           <div className="space-y-1.5">
             <Label htmlFor="rp-ref">
               Reference{" "}
-              <span className="text-muted-foreground font-normal">
-                (optional)
-              </span>
+              <span className="text-muted-foreground font-normal">(optional)</span>
             </Label>
             <Input
               id="rp-ref"
@@ -346,12 +455,72 @@ function RecordPaymentDialog({
               placeholder="e.g. Payment #1"
             />
           </div>
+
+          {/* Cash account */}
+          <div className="space-y-1.5">
+            <Label htmlFor="rp-cash">Cash / bank account</Label>
+            {cashAssets.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No cash accounts found for this entity.</p>
+            ) : (
+              <Select value={cashAssetId} onValueChange={setCashAssetId}>
+                <SelectTrigger id="rp-cash" className="w-full">
+                  <SelectValue placeholder="Select cash account…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {cashAssets.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>
+                      {a.name ?? "Unnamed"}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+
+          {/* New money in toggle — portfolio only */}
+          {allowNewMoneyIn && cashAssetId && (
+            <div className="flex items-center justify-between rounded-lg border p-3">
+              <div className="grid gap-0.5">
+                <p className="text-sm font-medium">
+                  {recordNewMoneyIn ? "Record new money in" : "Deplete cash balance"}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {recordNewMoneyIn
+                    ? "Adds a money-in entry before the repayment."
+                    : "Uses the existing cash balance."}
+                </p>
+              </div>
+              <Switch checked={recordNewMoneyIn} onCheckedChange={setRecordNewMoneyIn} />
+            </div>
+          )}
+
+          {/* Split funding info — portfolio with partial balance */}
+          {needsSplit && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 p-3 text-sm">
+              <p className="font-medium text-amber-800 dark:text-amber-300">Split funding</p>
+              <p className="text-amber-700 dark:text-amber-400 text-xs mt-0.5">
+                Cash balance ({fmtNum(selectedBalance)}) is less than the payment amount.{" "}
+                {fmtNum(splitAmount)} will be recorded as new money in to cover the shortfall.
+              </p>
+            </div>
+          )}
+
+          {/* Insufficient balance warning — non-portfolio */}
+          {insufficientBalance && (
+            <div className="rounded-md border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/30 p-3 text-sm">
+              <p className="font-medium text-red-800 dark:text-red-300">Insufficient balance</p>
+              <p className="text-red-700 dark:text-red-400 text-xs mt-0.5">
+                Cash balance ({fmtNum(selectedBalance)}) is less than the payment amount ({fmtNum(period.payment)}).
+              </p>
+            </div>
+          )}
+
           {error && <p className="text-xs text-destructive">{error}</p>}
           <div className="flex justify-end gap-2 pt-1">
             <Button type="button" variant="ghost" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={saving}>
+            <Button type="submit" disabled={saving || !canSubmit}>
               {saving ? "Saving…" : "Record payment"}
             </Button>
           </div>
@@ -369,12 +538,14 @@ export function LiabilitySheet({
   onOpenChange,
   assetName,
   defaultTab = "overview",
+  allowNewMoneyIn = false,
 }: {
   liability: Liability | null;
   open: boolean;
   onOpenChange: (v: boolean) => void;
   assetName?: string | null;
   defaultTab?: string;
+  allowNewMoneyIn?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -523,6 +694,7 @@ export function LiabilitySheet({
         <RecordPaymentDialog
           period={recordPeriod}
           liability={liability}
+          allowNewMoneyIn={allowNewMoneyIn}
           onClose={() => setRecordPeriod(null)}
           onSuccess={() => {
             setRecordPeriod(null);

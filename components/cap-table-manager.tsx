@@ -49,6 +49,7 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { DatePickerInput } from "@/components/date-input";
 import { CapitalCallReceive } from "@/components/capital-call-receive";
+import { ShareholderSheet } from "@/components/shareholder-sheet";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -170,6 +171,7 @@ function ShareholderDialog({
         name: form.name || null,
         type: form.type || null,
         is_ubo: form.is_ubo,
+        role: form.is_ubo ? "ubo" : "stakeholder",
         ubo_percentage: form.ubo_percentage
           ? Number(form.ubo_percentage)
           : null,
@@ -328,20 +330,14 @@ function ShareholderDialog({
 
 type EntryForm = {
   shareholder: string;
-  share_class: string;
   round_label: string;
-  shares_issued: string;
-  price_per_share: string;
   committed_amount: string;
   issued_at: string;
 };
 
 const BLANK_ENTRY: EntryForm = {
   shareholder: "",
-  share_class: "",
   round_label: "",
-  shares_issued: "",
-  price_per_share: "",
   committed_amount: "",
   issued_at: "",
 };
@@ -351,19 +347,15 @@ function EntryDialog({
   onClose,
   entityUUID,
   shareholders,
-  shareClasses,
   existing,
   onSaved,
-  isCommitment = false,
 }: {
   open: boolean;
   onClose: () => void;
   entityUUID: string;
   shareholders: CapTableShareholder[];
-  shareClasses: ShareClass[];
   existing: CapTableEntry | null;
   onSaved: () => void;
-  isCommitment?: boolean;
 }) {
   const [form, setForm] = React.useState<EntryForm>(BLANK_ENTRY);
   const [saving, setSaving] = React.useState(false);
@@ -376,16 +368,7 @@ function EntryDialog({
         existing
           ? {
               shareholder: existing.shareholder ?? "",
-              share_class: existing.share_class ?? "",
               round_label: existing.round_label ?? "",
-              shares_issued:
-                existing.shares_issued != null
-                  ? String(existing.shares_issued)
-                  : "",
-              price_per_share:
-                existing.price_per_share != null
-                  ? String(existing.price_per_share)
-                  : "",
               committed_amount:
                 existing.committed_amount != null
                   ? String(existing.committed_amount)
@@ -407,12 +390,7 @@ function EntryDialog({
       const body = {
         entity: entityUUID,
         shareholder: form.shareholder || null,
-        share_class: form.share_class || null,
         round_label: form.round_label || null,
-        shares_issued: form.shares_issued ? Number(form.shares_issued) : null,
-        price_per_share: form.price_per_share
-          ? Number(form.price_per_share)
-          : null,
         committed_amount: form.committed_amount
           ? Number(form.committed_amount)
           : null,
@@ -449,7 +427,7 @@ function EntryDialog({
           <DialogHeader>
             <DialogTitle>{existing ? "Edit Entry" : "Add Entry"}</DialogTitle>
             <DialogDescription>
-              Assign shares to a shareholder.
+              Record a commitment from a shareholder. Share issuance happens when capital is called.
             </DialogDescription>
           </DialogHeader>
           <FieldGroup className="mt-4">
@@ -473,28 +451,6 @@ function EntryDialog({
                 </SelectContent>
               </Select>
             </Field>
-            {!isCommitment && (
-              <Field>
-                <FieldLabel>Share Class</FieldLabel>
-                <Select
-                  value={form.share_class}
-                  onValueChange={(v) =>
-                    setForm((f) => ({ ...f, share_class: v }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select share class" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {shareClasses.map((sc) => (
-                      <SelectItem key={sc.id} value={sc.id}>
-                        {sc.name ?? sc.id}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-            )}
             <Field>
               <FieldLabel htmlFor="entry-round">Round</FieldLabel>
               <Input
@@ -506,72 +462,6 @@ function EntryDialog({
                 }
               />
             </Field>
-            {!isCommitment && (
-              <>
-                <Field>
-                  <FieldLabel htmlFor="entry-shares">Shares Issued</FieldLabel>
-                  <Input
-                    id="entry-shares"
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={form.shares_issued}
-                    onChange={(e) => {
-                      const shares = e.target.value;
-                      setForm((f) => {
-                        const price = parseFloat(f.price_per_share);
-                        const committed = parseFloat(f.committed_amount);
-                        const s = parseFloat(shares);
-                        if (!isNaN(s) && !isNaN(price))
-                          return {
-                            ...f,
-                            shares_issued: shares,
-                            committed_amount: String(s * price),
-                          };
-                        if (!isNaN(s) && !isNaN(committed) && s > 0)
-                          return {
-                            ...f,
-                            shares_issued: shares,
-                            price_per_share: String(committed / s),
-                          };
-                        return { ...f, shares_issued: shares };
-                      });
-                    }}
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="entry-price">Price per Share</FieldLabel>
-                  <Input
-                    id="entry-price"
-                    type="number"
-                    min="0"
-                    step="0.0001"
-                    value={form.price_per_share}
-                    onChange={(e) => {
-                      const price = e.target.value;
-                      setForm((f) => {
-                        const shares = parseFloat(f.shares_issued);
-                        const committed = parseFloat(f.committed_amount);
-                        const p = parseFloat(price);
-                        if (!isNaN(p) && !isNaN(shares))
-                          return {
-                            ...f,
-                            price_per_share: price,
-                            committed_amount: String(shares * p),
-                          };
-                        if (!isNaN(p) && !isNaN(committed) && p > 0)
-                          return {
-                            ...f,
-                            price_per_share: price,
-                            shares_issued: String(committed / p),
-                          };
-                        return { ...f, price_per_share: price };
-                      });
-                    }}
-                  />
-                </Field>
-              </>
-            )}
             <Field>
               <FieldLabel htmlFor="entry-committed">
                 Committed Amount
@@ -634,6 +524,7 @@ function ShareClassDialog({
 }) {
   const [name, setName] = React.useState("");
   const [voting, setVoting] = React.useState(true);
+  const [currentNav, setCurrentNav] = React.useState("");
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -642,6 +533,7 @@ function ShareClassDialog({
       setError(null);
       setName(existing?.name ?? "");
       setVoting(existing?.voting_rights ?? true);
+      setCurrentNav(existing?.current_nav != null ? String(existing.current_nav) : "");
     }
   }, [open, existing]);
 
@@ -654,6 +546,7 @@ function ShareClassDialog({
         entity: entityUUID,
         name: name || null,
         voting_rights: voting,
+        current_nav: currentNav ? Number(currentNav) : null,
       };
       const url = existing
         ? `/api/share-classes/${existing.id}`
@@ -700,6 +593,18 @@ function ShareClassDialog({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 required
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="sc-nav">Current NAV / Price per Share</FieldLabel>
+              <Input
+                id="sc-nav"
+                type="number"
+                min="0"
+                step="0.0001"
+                placeholder="e.g. 10.00"
+                value={currentNav}
+                onChange={(e) => setCurrentNav(e.target.value)}
               />
             </Field>
             <Field>
@@ -798,6 +703,10 @@ function CapitalCallDialog({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!shareClass) {
+      setError("Share class is required.");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -808,9 +717,7 @@ function CapitalCallDialog({
         status,
         called_at: calledAt ? new Date(calledAt).getTime() : null,
         due_date: dueDate ? new Date(dueDate).getTime() : null,
-        ...(isCommitment && {
-          share_class: shareClass || null,
-        }),
+        share_class: shareClass || null,
       };
       const url = existing
         ? `/api/capital-calls/${existing.id}`
@@ -901,6 +808,33 @@ function CapitalCallDialog({
                 calls later.
               </p>
             </Field>
+            <Field>
+              <FieldLabel>Share Class <span className="text-destructive">*</span></FieldLabel>
+              <Select value={shareClass} onValueChange={setShareClass}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select share class" />
+                </SelectTrigger>
+                <SelectContent>
+                  {shareClasses.map((sc) => (
+                    <SelectItem key={sc.id} value={sc.id}>
+                      {sc.name ?? sc.id}
+                      {sc.current_nav != null && ` — ${fmtCurrency(sc.current_nav, currencyCode)} / share`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {(() => {
+                const sc = shareClasses.find((s) => s.id === shareClass);
+                const amt = parseFloat(amount);
+                if (!sc?.current_nav || !amt || isNaN(amt)) return null;
+                const shares = amt / sc.current_nav;
+                return (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Shares to issue: <span className="font-medium tabular-nums">{shares.toLocaleString("en", { maximumFractionDigits: 4 })}</span>
+                  </p>
+                );
+              })()}
+            </Field>
             <DatePickerInput
               id="cc-called"
               label="Called Date"
@@ -913,25 +847,6 @@ function CapitalCallDialog({
               value={dueDate ? new Date(dueDate) : undefined}
               onChange={(d) => setDueDate(d ? toYmd(d) : "")}
             />
-            {isCommitment && shareClasses.length > 0 && (
-              <Field>
-                <FieldLabel>Share Class</FieldLabel>
-                <Select value={shareClass} onValueChange={setShareClass}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select share class (optional)" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {shareClasses.map((sc) => (
-                      <SelectItem key={sc.id} value={sc.id}>
-                        {sc.name ?? sc.id}
-                        {sc.price_per_share != null &&
-                          ` — ${sc.price_per_share}`}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-            )}
             {error && <FieldError>{error}</FieldError>}
           </FieldGroup>
           <DialogFooter className="mt-4">
@@ -968,17 +883,26 @@ export function CapTableManager({
   entityName,
   currencyCode = "EUR",
   variant = "equity",
+  currentUserId,
+  entityOwner,
 }: {
   entityUUID: string;
   defaultCountryId?: number | null;
   entityName?: string;
   currencyCode?: string;
   variant?: "equity" | "commitment";
+  currentUserId?: number | null;
+  entityOwner?: number | null;
 }) {
   const isCommitment = variant === "commitment";
   const [shareholders, setShareholders] = React.useState<CapTableShareholder[]>(
     [],
   );
+  // Owner and UBOs can edit; stakeholders/investors are view-only.
+  // If entityOwner is null (not returned by API), default to allowing edit.
+  const isEntityOwner = entityOwner != null && currentUserId != null && currentUserId === entityOwner;
+  const currentUserShareholder = shareholders.find((sh) => currentUserId != null && sh.user === currentUserId);
+  const canEdit = entityOwner == null || isEntityOwner || currentUserShareholder?.role === "ubo";
   const [shareClasses, setShareClasses] = React.useState<ShareClass[]>([]);
   const [entries, setEntries] = React.useState<CapTableEntry[]>([]);
   const [capitalCalls, setCapitalCalls] = React.useState<CapitalCall[]>([]);
@@ -1009,6 +933,11 @@ export function CapTableManager({
     existing: CapitalCall | null;
   }>({ open: false, entryId: "", existing: null });
   const [inviting, setInviting] = React.useState<Set<string>>(new Set());
+  const [shSheet, setShSheet] = React.useState<{
+    open: boolean;
+    shareholder: CapTableShareholder | null;
+    entryId: string | null;
+  }>({ open: false, shareholder: null, entryId: null });
 
   async function sendInvite(sh: CapTableShareholder) {
     setInviting((prev) => new Set(prev).add(sh.id));
@@ -1096,7 +1025,13 @@ export function CapTableManager({
     void load();
   }, [entityUUID]);
 
-  const totalShares = entries.reduce((s, e) => s + (e.shares_issued ?? 0), 0);
+  const totalShares = entries.reduce((total, e) => {
+    const callsForE = capitalCalls.filter((c) => c.cap_table_entry === e.id);
+    return total + callsForE.reduce((sum, c) => {
+      const sc = shareClasses.find((s) => s.id === c.share_class);
+      return sum + (sc?.current_nav && c.amount ? c.amount / sc.current_nav : 0);
+    }, 0);
+  }, 0);
   const totalCommitted = entries.reduce(
     (s, e) => s + (e.committed_amount ?? 0),
     0,
@@ -1106,7 +1041,10 @@ export function CapTableManager({
     nav !== null && totalShares > 0 ? nav / totalShares : null;
 
   function shareholderName(id: string | null) {
-    return shareholders.find((s) => s.id === id)?.name ?? "—";
+    const sh = shareholders.find((s) => s.id === id);
+    if (!sh) return "—";
+    const isYou = currentUserId != null && sh.user === currentUserId;
+    return sh.name ? (isYou ? `${sh.name} (You)` : sh.name) : "—";
   }
   function shareClassName(id: string | null) {
     return shareClasses.find((s) => s.id === id)?.name ?? "—";
@@ -1202,13 +1140,15 @@ export function CapTableManager({
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-3">
             <CardTitle className="text-base">Share Classes</CardTitle>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setScDialog({ open: true, existing: null })}
-            >
-              <Plus className="size-3.5 mr-1" /> New Class
-            </Button>
+            {canEdit && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setScDialog({ open: true, existing: null })}
+              >
+                <Plus className="size-3.5 mr-1" /> New Class
+              </Button>
+            )}
           </CardHeader>
           <CardContent>
             {shareClasses.length === 0 ? (
@@ -1228,18 +1168,22 @@ export function CapTableManager({
                         Voting
                       </Badge>
                     )}
-                    <button
-                      onClick={() => setScDialog({ open: true, existing: sc })}
-                      className="text-muted-foreground hover:text-foreground ml-1"
-                    >
-                      <Pencil className="size-3" />
-                    </button>
-                    <button
-                      onClick={() => deleteShareClass(sc.id)}
-                      className="text-muted-foreground hover:text-destructive"
-                    >
-                      <Trash2 className="size-3" />
-                    </button>
+                    {canEdit && (
+                      <>
+                        <button
+                          onClick={() => setScDialog({ open: true, existing: sc })}
+                          className="text-muted-foreground hover:text-foreground ml-1"
+                        >
+                          <Pencil className="size-3" />
+                        </button>
+                        <button
+                          onClick={() => deleteShareClass(sc.id)}
+                          className="text-muted-foreground hover:text-destructive"
+                        >
+                          <Trash2 className="size-3" />
+                        </button>
+                      </>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1251,21 +1195,25 @@ export function CapTableManager({
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-3">
             <CardTitle className="text-base">Cap Table</CardTitle>
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setShDialog({ open: true, existing: null })}
-              >
-                <Plus className="size-3.5 mr-1" /> Shareholder
-              </Button>
-              <Button
-                size="sm"
-                onClick={() => setEntryDialog({ open: true, existing: null })}
-              >
-                <Plus className="size-3.5 mr-1" /> Entry
-              </Button>
-            </div>
+            {canEdit && (
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setShDialog({ open: true, existing: null })}
+                >
+                  <Plus className="size-3.5 mr-1" /> Shareholder
+                </Button>
+                {shareholders.length > 0 && (
+                  <Button
+                    size="sm"
+                    onClick={() => setEntryDialog({ open: true, existing: null })}
+                  >
+                    <Plus className="size-3.5 mr-1" /> Entry
+                  </Button>
+                )}
+              </div>
+            )}
           </CardHeader>
           <CardContent className="p-0">
             {entries.length === 0 ? (
@@ -1277,32 +1225,14 @@ export function CapTableManager({
                 <thead>
                   <tr className="border-b text-xs text-muted-foreground">
                     <th className="text-left py-2 px-4 font-medium w-6"></th>
-                    <th className="text-left py-2 px-4 font-medium">
-                      Shareholder
-                    </th>
-                    {!isCommitment && (
-                      <th className="text-left py-2 px-4 font-medium">Class</th>
-                    )}
+                    <th className="text-left py-2 px-4 font-medium">Shareholder</th>
                     <th className="text-left py-2 px-4 font-medium">Round</th>
-                    {!isCommitment && (
-                      <th className="text-right py-2 px-4 font-medium">
-                        Shares
-                      </th>
-                    )}
-                    {!isCommitment && (
-                      <th className="text-right py-2 px-4 font-medium">
-                        Price
-                      </th>
-                    )}
-                    <th className="text-right py-2 px-4 font-medium">
-                      Committed
-                    </th>
-                    <th className="text-right py-2 px-4 font-medium">
-                      Ownership %
-                    </th>
-                    <th className="text-right py-2 px-4 font-medium">
-                      Current Value
-                    </th>
+                    <th className="text-right py-2 px-4 font-medium">Committed</th>
+                    <th className="text-right py-2 px-4 font-medium">Called</th>
+                    <th className="text-right py-2 px-4 font-medium">Remaining</th>
+                    <th className="text-right py-2 px-4 font-medium">Shares</th>
+                    <th className="text-right py-2 px-4 font-medium">Ownership %</th>
+                    <th className="text-right py-2 px-4 font-medium">Current Value</th>
                     <th className="text-right py-2 px-4 font-medium">G/L</th>
                     <th className="py-2 px-4"></th>
                   </tr>
@@ -1319,21 +1249,28 @@ export function CapTableManager({
                       (s, c) => s + (c.amount ?? 0),
                       0,
                     );
-                    const ownership =
-                      totalShares > 0 && entry.shares_issued
-                        ? ((entry.shares_issued / totalShares) * 100).toFixed(2)
-                        : "—";
+                    const remaining = (entry.committed_amount ?? 0) - calledTotal;
+                    const sharesForEntry = callsForEntry.reduce((sum, c) => {
+                      const sc = shareClasses.find((s) => s.id === c.share_class);
+                      return sum + (sc?.current_nav && c.amount ? c.amount / sc.current_nav : 0);
+                    }, 0);
                     const ownershipFrac =
-                      totalShares > 0 && entry.shares_issued
-                        ? entry.shares_issued / totalShares
+                      totalShares > 0
+                        ? sharesForEntry / totalShares
+                        : totalCommitted > 0
+                        ? (entry.committed_amount ?? 0) / totalCommitted
                         : null;
+                    const ownership =
+                      ownershipFrac != null
+                        ? (ownershipFrac * 100).toFixed(2)
+                        : "—";
                     const currentValue =
                       nav !== null && ownershipFrac !== null
                         ? ownershipFrac * nav
                         : null;
                     const gl =
-                      currentValue !== null && entry.committed_amount != null
-                        ? currentValue - entry.committed_amount
+                      calledTotal > 0 && nav !== null && nav > 0 && currentValue !== null
+                        ? currentValue - calledTotal
                         : null;
                     const expanded = expandedEntries.has(entry.id);
                     const canCall = !!sh?.user;
@@ -1354,7 +1291,12 @@ export function CapTableManager({
                           </td>
                           <td className="py-2 px-4">
                             <div className="flex items-center gap-1.5">
-                              <span>{shareholderName(entry.shareholder)}</span>
+                              <button
+                                className="hover:underline text-left"
+                                onClick={() => sh && setShSheet({ open: true, shareholder: sh, entryId: entry.id })}
+                              >
+                                {shareholderName(entry.shareholder)}
+                              </button>
                               {sh?.is_ubo && (
                                 <span title="UBO">
                                   <Shield className="size-3 text-amber-500" />
@@ -1362,42 +1304,20 @@ export function CapTableManager({
                               )}
                             </div>
                           </td>
-                          {!isCommitment && (
-                            <td className="py-2 px-4 text-muted-foreground">
-                              {shareClassName(entry.share_class)}
-                            </td>
-                          )}
                           <td className="py-2 px-4 text-muted-foreground">
                             {entry.round_label ?? "—"}
                           </td>
-                          {!isCommitment && (
-                            <>
-                              <td className="py-2 px-4 text-right tabular-nums">
-                                {fmt(entry.shares_issued, 0)}
-                              </td>
-                              <td className="py-2 px-4 text-right tabular-nums">
-                                {fmtCurrency(
-                                  entry.price_per_share,
-                                  currencyCode,
-                                )}
-                              </td>
-                            </>
-                          )}
                           <td className="py-2 px-4 text-right tabular-nums">
-                            <div className="flex flex-col items-end">
-                              <span>
-                                {fmtCurrency(
-                                  entry.committed_amount,
-                                  currencyCode,
-                                )}
-                              </span>
-                              {calledTotal > 0 && (
-                                <span className="text-xs text-muted-foreground">
-                                  {fmtCurrency(calledTotal, currencyCode)}{" "}
-                                  called
-                                </span>
-                              )}
-                            </div>
+                            {fmtCurrency(entry.committed_amount, currencyCode)}
+                          </td>
+                          <td className="py-2 px-4 text-right tabular-nums">
+                            {calledTotal > 0 ? fmtCurrency(calledTotal, currencyCode) : "—"}
+                          </td>
+                          <td className="py-2 px-4 text-right tabular-nums">
+                            {fmtCurrency(remaining, currencyCode)}
+                          </td>
+                          <td className="py-2 px-4 text-right tabular-nums">
+                            {sharesForEntry > 0 ? fmt(sharesForEntry, 0) : "—"}
                           </td>
                           <td className="py-2 px-4 text-right tabular-nums">
                             {ownership}%
@@ -1427,42 +1347,46 @@ export function CapTableManager({
                           </td>
                           <td className="py-2 px-4">
                             <div className="flex items-center gap-1 justify-end">
-                              <button
-                                onClick={() =>
-                                  canCall &&
-                                  setCcDialog({
-                                    open: true,
-                                    entryId: entry.id,
-                                    existing: null,
-                                  })
-                                }
-                                disabled={!canCall}
-                                className="text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
-                                title={
-                                  canCall
-                                    ? "Record capital call"
-                                    : "Shareholder must sign up before a capital call can be issued"
-                                }
-                              >
-                                <Plus className="size-3.5" />
-                              </button>
-                              <button
-                                onClick={() =>
-                                  setEntryDialog({
-                                    open: true,
-                                    existing: entry,
-                                  })
-                                }
-                                className="text-muted-foreground hover:text-foreground"
-                              >
-                                <Pencil className="size-3.5" />
-                              </button>
-                              <button
-                                onClick={() => deleteEntry(entry.id)}
-                                className="text-muted-foreground hover:text-destructive"
-                              >
-                                <Trash2 className="size-3.5" />
-                              </button>
+                              {canEdit && (
+                                <>
+                                  <button
+                                    onClick={() =>
+                                      canCall &&
+                                      setCcDialog({
+                                        open: true,
+                                        entryId: entry.id,
+                                        existing: null,
+                                      })
+                                    }
+                                    disabled={!canCall}
+                                    className="text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:cursor-not-allowed"
+                                    title={
+                                      canCall
+                                        ? "Record capital call"
+                                        : "Shareholder must sign up before a capital call can be issued"
+                                    }
+                                  >
+                                    <Plus className="size-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() =>
+                                      setEntryDialog({
+                                        open: true,
+                                        existing: entry,
+                                      })
+                                    }
+                                    className="text-muted-foreground hover:text-foreground"
+                                  >
+                                    <Pencil className="size-3.5" />
+                                  </button>
+                                  <button
+                                    onClick={() => deleteEntry(entry.id)}
+                                    className="text-muted-foreground hover:text-destructive"
+                                  >
+                                    <Trash2 className="size-3.5" />
+                                  </button>
+                                </>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -1473,86 +1397,85 @@ export function CapTableManager({
                               key={cc.id}
                               className="bg-muted/20 border-b text-xs"
                             >
-                              <td></td>
-                              <td
-                                colSpan={2}
-                                className="py-1.5 px-4 pl-8 text-muted-foreground"
-                              >
-                                <div>
-                                  {callEntityName(cc) ?? "Capital call"}
-                                  {cc.called_at
-                                    ? ` — ${fmtDate(cc.called_at)}`
-                                    : cc.status === "pending"
-                                      ? " (pending)"
-                                      : ""}
-                                </div>
-                                {isCommitment &&
-                                  cc.share_class &&
-                                  (() => {
-                                    const sc = shareClasses.find(
-                                      (s) => s.id === cc.share_class,
-                                    );
-                                    return sc ? (
-                                      <div className="text-xs opacity-70">
-                                        {sc.name}
-                                        {sc.price_per_share != null &&
-                                          ` — ${fmtCurrency(sc.price_per_share, currencyCode)} / share`}
+                              {(() => {
+                                const sc = shareClasses.find((s) => s.id === cc.share_class);
+                                const sharesForCall = sc?.current_nav && cc.amount ? cc.amount / sc.current_nav : null;
+                                return (
+                                  <>
+                                    <td></td>
+                                    <td
+                                      colSpan={3}
+                                      className="py-1.5 px-4 pl-8 text-muted-foreground text-xs"
+                                    >
+                                      <div>
+                                        {callEntityName(cc) ?? "Capital call"}
+                                        {cc.called_at
+                                          ? ` — ${fmtDate(cc.called_at)}`
+                                          : cc.status === "pending"
+                                            ? " (pending)"
+                                            : ""}
                                       </div>
-                                    ) : null;
-                                  })()}
-                              </td>
-                              {!isCommitment && <td></td>}
-                              {!isCommitment && <td></td>}
-                              {!isCommitment && <td></td>}
-                              <td className="py-1.5 px-4 text-right tabular-nums">
-                                {fmtCurrency(cc.amount, currencyCode)}
-                              </td>
-                              <td className="py-1.5 px-4 text-right">
-                                <span
-                                  className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-medium ${cc.status === "paid" && cc.received_at ? "bg-emerald-100 text-emerald-800" : STATUS_BADGE[cc.status ?? "pending"]}`}
-                                >
-                                  {cc.status === "paid" && cc.received_at
-                                    ? "settled"
-                                    : (cc.status ?? "pending")}
-                                </span>
-                              </td>
-                              <td className="py-1.5 px-4">
-                                <div className="flex items-center gap-1 justify-end">
-                                  {cc.status === "paid" && !cc.received_at && (
-                                    <CapitalCallReceive
-                                      capitalCall={cc}
-                                      entityUUID={entityUUID}
-                                      currencyCode={currencyCode}
-                                      onSuccess={load}
-                                    />
-                                  )}
-                                  <button
-                                    onClick={() =>
-                                      setCcDialog({
-                                        open: true,
-                                        entryId: entry.id,
-                                        existing: cc,
-                                      })
-                                    }
-                                    className="text-muted-foreground hover:text-foreground"
-                                  >
-                                    <Pencil className="size-3" />
-                                  </button>
-                                  <button
-                                    onClick={() => deleteCapitalCall(cc.id)}
-                                    className="text-muted-foreground hover:text-destructive"
-                                  >
-                                    <Trash2 className="size-3" />
-                                  </button>
-                                </div>
-                              </td>
+                                      {sc && (
+                                        <div className="opacity-70">
+                                          {sc.name}
+                                          {sc.current_nav != null && ` — ${fmtCurrency(sc.current_nav, currencyCode)} / share`}
+                                        </div>
+                                      )}
+                                    </td>
+                                    <td className="py-1.5 px-4 text-right tabular-nums text-xs">
+                                      {fmtCurrency(cc.amount, currencyCode)}
+                                    </td>
+                                    <td></td>
+                                    <td className="py-1.5 px-4 text-right tabular-nums text-xs">
+                                      {sharesForCall != null ? fmt(sharesForCall, 0) : "—"}
+                                    </td>
+                                    <td className="py-1.5 px-4 text-right text-xs">
+                                      <span
+                                        className={`inline-flex items-center rounded-full px-1.5 py-0.5 font-medium ${cc.status === "paid" && cc.received_at ? "bg-emerald-100 text-emerald-800" : STATUS_BADGE[cc.status ?? "pending"]}`}
+                                      >
+                                        {cc.status === "paid" && cc.received_at ? "Settled" : (cc.status ?? "pending")}
+                                      </span>
+                                    </td>
+                                    <td className="py-1.5 px-4 text-xs">
+                                      <div className="flex items-center gap-1 justify-end">
+                                        {cc.status === "paid" && !cc.received_at && (
+                                          <CapitalCallReceive
+                                            capitalCall={cc}
+                                            entityUUID={entityUUID}
+                                            currencyCode={currencyCode}
+                                            onSuccess={load}
+                                          />
+                                        )}
+                                        <button
+                                          onClick={() =>
+                                            setCcDialog({
+                                              open: true,
+                                              entryId: entry.id,
+                                              existing: cc,
+                                            })
+                                          }
+                                          className="text-muted-foreground hover:text-foreground"
+                                        >
+                                          <Pencil className="size-3" />
+                                        </button>
+                                        <button
+                                          onClick={() => deleteCapitalCall(cc.id)}
+                                          className="text-muted-foreground hover:text-destructive"
+                                        >
+                                          <Trash2 className="size-3" />
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </>
+                                );
+                              })()}
                             </tr>
                           ))}
                         {expanded && callsForEntry.length === 0 && (
                           <tr className="bg-muted/20 border-b">
                             <td></td>
                             <td
-                              colSpan={isCommitment ? 7 : 10}
+                              colSpan={10}
                               className="py-2 px-4 pl-8 text-xs text-muted-foreground"
                             >
                               {canCall ? (
@@ -1586,23 +1509,20 @@ export function CapTableManager({
                 </tbody>
                 <tfoot>
                   <tr className="border-t text-xs font-medium">
-                    <td
-                      colSpan={isCommitment ? 2 : 4}
-                      className="py-2 px-4 text-muted-foreground"
-                    >
+                    <td colSpan={3} className="py-2 px-4 text-muted-foreground">
                       Total
                     </td>
-                    {isCommitment && <td></td>}
-                    {!isCommitment && (
-                      <>
-                        <td className="py-2 px-4 text-right tabular-nums">
-                          {fmt(totalShares, 0)}
-                        </td>
-                        <td></td>
-                      </>
-                    )}
                     <td className="py-2 px-4 text-right tabular-nums">
                       {fmtCurrency(totalCommitted, currencyCode)}
+                    </td>
+                    <td className="py-2 px-4 text-right tabular-nums">
+                      {totalCalled > 0 ? fmtCurrency(totalCalled, currencyCode) : "—"}
+                    </td>
+                    <td className="py-2 px-4 text-right tabular-nums">
+                      {fmtCurrency(totalCommitted - totalCalled, currencyCode)}
+                    </td>
+                    <td className="py-2 px-4 text-right tabular-nums">
+                      {totalShares > 0 ? fmt(totalShares, 0) : "—"}
                     </td>
                     <td className="py-2 px-4 text-right">100%</td>
                     <td className="py-2 px-4 text-right tabular-nums">
@@ -1611,16 +1531,10 @@ export function CapTableManager({
                     <td className="py-2 px-4 text-right tabular-nums">
                       {navLoading ? (
                         "…"
-                      ) : nav !== null && totalCommitted > 0 ? (
-                        <span
-                          className={
-                            nav - totalCommitted >= 0
-                              ? "text-emerald-600"
-                              : "text-destructive"
-                          }
-                        >
-                          {nav - totalCommitted >= 0 ? "+" : ""}
-                          {fmtCurrency(nav - totalCommitted, currencyCode)}
+                      ) : nav !== null && nav > 0 && totalCalled > 0 ? (
+                        <span className={nav - totalCalled >= 0 ? "text-emerald-600" : "text-destructive"}>
+                          {nav - totalCalled >= 0 ? "+" : ""}
+                          {fmtCurrency(nav - totalCalled, currencyCode)}
                         </span>
                       ) : (
                         "—"
@@ -1639,13 +1553,15 @@ export function CapTableManager({
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-3">
               <CardTitle className="text-base">Shareholders</CardTitle>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setShDialog({ open: true, existing: null })}
-              >
-                <Plus className="size-3.5 mr-1" /> Add
-              </Button>
+              {canEdit && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setShDialog({ open: true, existing: null })}
+                >
+                  <Plus className="size-3.5 mr-1" /> Add
+                </Button>
+              )}
             </CardHeader>
             <CardContent className="p-0">
               <table className="w-full text-sm">
@@ -1653,7 +1569,7 @@ export function CapTableManager({
                   <tr className="border-b text-xs text-muted-foreground">
                     <th className="text-left py-2 px-4 font-medium">Name</th>
                     <th className="text-left py-2 px-4 font-medium">Type</th>
-                    <th className="text-left py-2 px-4 font-medium">UBO</th>
+                    <th className="text-left py-2 px-4 font-medium">Role</th>
                     <th className="text-left py-2 px-4 font-medium">
                       Nationality
                     </th>
@@ -1662,28 +1578,37 @@ export function CapTableManager({
                   </tr>
                 </thead>
                 <tbody>
-                  {shareholders.map((sh) => (
+                  {shareholders.map((sh) => {
+                    const isYou = currentUserId != null && sh.user === currentUserId;
+                    return (
                     <tr key={sh.id} className="border-b hover:bg-muted/30">
                       <td className="py-2 px-4 font-medium">
-                        {sh.name ?? "—"}
+                        <div className="flex items-center gap-1.5">
+                          <span>{sh.name ?? "—"}{isYou && <span className="text-muted-foreground font-normal ml-1">(You)</span>}</span>
+                          {entityOwner != null && sh.user === entityOwner && (
+                            <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">Owner</span>
+                          )}
+                        </div>
                       </td>
                       <td className="py-2 px-4 text-muted-foreground capitalize">
                         {sh.type ?? "—"}
                       </td>
                       <td className="py-2 px-4">
-                        {sh.is_ubo ? (
-                          <div className="flex items-center gap-1">
-                            <Shield className="size-3.5 text-amber-500" />
-                            <span className="text-xs">
-                              {sh.ubo_percentage != null
-                                ? `${sh.ubo_percentage}%`
-                                : "Yes"}
+                        {sh.role === "ubo" ? (
+                          <div className="flex items-center gap-1.5">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                              <Shield className="size-3" />UBO
                             </span>
+                            {sh.ubo_percentage != null && (
+                              <span className="text-xs text-muted-foreground">{sh.ubo_percentage}%</span>
+                            )}
                           </div>
+                        ) : sh.role === "stakeholder" ? (
+                          <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">Stakeholder</span>
+                        ) : sh.role === "investor" ? (
+                          <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">Investor</span>
                         ) : (
-                          <span className="text-muted-foreground text-xs">
-                            —
-                          </span>
+                          <span className="text-muted-foreground text-xs">—</span>
                         )}
                       </td>
                       <td className="py-2 px-4 text-muted-foreground">
@@ -1694,7 +1619,7 @@ export function CapTableManager({
                       </td>
                       <td className="py-2 px-4">
                         <div className="flex items-center gap-1 justify-end">
-                          {sh.email && (
+                          {sh.email && !(currentUserId != null && sh.user === currentUserId) && !(entityOwner != null && sh.user === entityOwner) && (
                             <button
                               onClick={() => sendInvite(sh)}
                               disabled={inviting.has(sh.id)}
@@ -1716,24 +1641,29 @@ export function CapTableManager({
                               )}
                             </button>
                           )}
-                          <button
-                            onClick={() =>
-                              setShDialog({ open: true, existing: sh })
-                            }
-                            className="text-muted-foreground hover:text-foreground"
-                          >
-                            <Pencil className="size-3.5" />
-                          </button>
-                          <button
-                            onClick={() => deleteShareholder(sh.id)}
-                            className="text-muted-foreground hover:text-destructive"
-                          >
-                            <Trash2 className="size-3.5" />
-                          </button>
+                          {canEdit && (
+                            <>
+                              <button
+                                onClick={() =>
+                                  setShDialog({ open: true, existing: sh })
+                                }
+                                className="text-muted-foreground hover:text-foreground"
+                              >
+                                <Pencil className="size-3.5" />
+                              </button>
+                              <button
+                                onClick={() => deleteShareholder(sh.id)}
+                                className="text-muted-foreground hover:text-destructive"
+                              >
+                                <Trash2 className="size-3.5" />
+                              </button>
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </CardContent>
@@ -1755,10 +1685,8 @@ export function CapTableManager({
         onClose={() => setEntryDialog({ open: false, existing: null })}
         entityUUID={entityUUID}
         shareholders={shareholders}
-        shareClasses={shareClasses}
         existing={entryDialog.existing}
         onSaved={load}
-        isCommitment={isCommitment}
       />
       <ShareClassDialog
         open={scDialog.open}
@@ -1790,6 +1718,17 @@ export function CapTableManager({
         currencyCode={currencyCode}
         isCommitment={isCommitment}
         shareClasses={shareClasses}
+      />
+      <ShareholderSheet
+        open={shSheet.open}
+        onOpenChange={(o) => setShSheet((s) => ({ ...s, open: o }))}
+        shareholder={shSheet.shareholder}
+        capitalCalls={capitalCalls.filter(c => c.cap_table_entry === shSheet.entryId)}
+        shareClasses={shareClasses}
+        entityUUID={entityUUID}
+        entityName={entityName}
+        currencyCode={currencyCode}
+        onUpdated={load}
       />
     </div>
   );

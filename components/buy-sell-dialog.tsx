@@ -40,6 +40,7 @@ type Props = {
   cashAssets: CashAsset[];
   costBasis?: number;
   instrument?: Instrument | null;
+  allowNewMoneyIn?: boolean;
   onSuccess: () => void;
 };
 
@@ -62,6 +63,7 @@ export function BuySellDialog({
   cashAssets,
   costBasis = 0,
   instrument,
+  allowNewMoneyIn = false,
   onSuccess,
 }: Props) {
   const isTicker = !!instrument?.ticker;
@@ -76,6 +78,7 @@ export function BuySellDialog({
     defaultCurrencyId != null ? String(defaultCurrencyId) : "",
   );
   const [cashAssetId, setCashAssetId] = React.useState("");
+  const [cashBalances, setCashBalances] = React.useState<Map<string, number>>(new Map());
   const [recordNewMoneyIn, setRecordNewMoneyIn] = React.useState(true);
   const [reference, setReference] = React.useState("");
   const [notes, setNotes] = React.useState("");
@@ -179,6 +182,52 @@ export function BuySellDialog({
     }
   }, [matchedCashAssets, cashAssetId]);
 
+  // Fetch cash balances when dialog opens
+  React.useEffect(() => {
+    if (!open || cashAssets.length === 0) return;
+    async function loadBalances() {
+      const balances = new Map<string, number>();
+      await Promise.all(
+        cashAssets.map(async (a) => {
+          const [entriesRes, mutationsRes] = await Promise.all([
+            fetch(`/api/transaction-entries?entity=${entityUUID}&asset=${a.id}`).then((r) => r.ok ? r.json() : { entries: [] }),
+            fetch(`/api/mutations?entity=${entityUUID}&asset=${a.id}`).then((r) => r.ok ? r.json() : []),
+          ]);
+          const entries: { direction: string; amount: number }[] = Array.isArray(entriesRes.entries) ? entriesRes.entries : [];
+          const mutations: { delta: number }[] = Array.isArray(mutationsRes) ? mutationsRes : [];
+          const bal = entries.reduce((s, e) => s + (e.direction === "in" ? e.amount : -e.amount), 0)
+            + mutations.reduce((s, m) => s + (m.delta ?? 0), 0);
+          balances.set(a.id, bal);
+        })
+      );
+      setCashBalances(balances);
+    }
+    void loadBalances();
+  }, [open, entityUUID, cashAssets]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const previewAmount = isTicker ? tickerTotal ?? 0 : parseFloat(amount) || 0;
+  const selectedCashBalance = cashAssetId ? (cashBalances.get(cashAssetId) ?? 0) : 0;
+  const requiresCapitalCheck = !allowNewMoneyIn;
+  const insufficientCashBalance =
+    requiresCapitalCheck &&
+    mode === "buy" &&
+    !!cashAssetId &&
+    !needsNewCashAccount &&
+    previewAmount > 0 &&
+    selectedCashBalance < previewAmount;
+  const splitAmount =
+    allowNewMoneyIn &&
+    !recordNewMoneyIn &&
+    !needsNewCashAccount &&
+    !!cashAssetId &&
+    mode === "buy" &&
+    selectedCashBalance >= 0 &&
+    previewAmount > 0 &&
+    selectedCashBalance < previewAmount
+      ? previewAmount - selectedCashBalance
+      : 0;
+  const needsSplit = splitAmount > 0;
+
   const reset = () => {
     setMode("buy");
     setAmount("");
@@ -257,14 +306,16 @@ export function BuySellDialog({
 
       // 3. Entry legs
       if (mode === "buy") {
-        if (recordNewMoneyIn || needsNewCashAccount) {
+        if (recordNewMoneyIn || needsNewCashAccount || needsSplit) {
           await fetch("/api/transaction-entries", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               transaction: tx.id, entry_type: "cash", entity: entityUUID,
               object_type: "asset", object_id: resolvedCashAssetId,
-              direction: "in", currency: Number(currencyId), amount: parsedAmount,
+              direction: "in", currency: Number(currencyId),
+              amount: needsSplit ? splitAmount : parsedAmount,
+              source: "new_money_in",
             }),
           });
         }
@@ -275,6 +326,7 @@ export function BuySellDialog({
             transaction: tx.id, entry_type: "cash", entity: entityUUID,
             object_type: "asset", object_id: resolvedCashAssetId,
             direction: "out", currency: Number(currencyId), amount: parsedAmount,
+            source: "asset", source_id: assetId,
           }),
         });
         const assetInRes = await fetch("/api/transaction-entries", {
@@ -285,6 +337,7 @@ export function BuySellDialog({
             object_type: "asset", object_id: assetId,
             direction: "in", currency: Number(currencyId), amount: parsedAmount,
             ...(isTicker && Number.isFinite(parsedUnits) ? { units: parsedUnits } : {}),
+            ...(resolvedCashAssetId ? { source: "cash", source_id: resolvedCashAssetId } : {}),
           }),
         });
         if (!assetInRes.ok) throw new Error(await assetInRes.text());
@@ -516,8 +569,8 @@ export function BuySellDialog({
             );
           })()}
 
-          {/* Record new money in toggle */}
-          {mode === "buy" && cashAssetId && !needsNewCashAccount && (
+          {/* Record new money in toggle — portfolio only */}
+          {mode === "buy" && allowNewMoneyIn && cashAssetId && !needsNewCashAccount && (
             <div className="flex items-center justify-between rounded-lg border p-3">
               <div className="grid gap-0.5">
                 <p className="text-sm font-medium">
@@ -530,6 +583,27 @@ export function BuySellDialog({
                 </p>
               </div>
               <Switch checked={recordNewMoneyIn} onCheckedChange={setRecordNewMoneyIn} />
+            </div>
+          )}
+
+          {/* Split funding info — portfolio with partial balance */}
+          {needsSplit && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/30 p-3 text-sm">
+              <p className="font-medium text-amber-800 dark:text-amber-300">Split funding</p>
+              <p className="text-amber-700 dark:text-amber-400 text-xs mt-0.5">
+                Cash balance ({selectedCurrencyCode} {selectedCashBalance.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) is less than the purchase amount.{" "}
+                {selectedCurrencyCode} {splitAmount.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} will be recorded as new money in to cover the shortfall.
+              </p>
+            </div>
+          )}
+
+          {/* Insufficient balance — non-portfolio */}
+          {insufficientCashBalance && (
+            <div className="rounded-md border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/30 p-3 text-sm">
+              <p className="font-medium text-red-800 dark:text-red-300">Insufficient capital</p>
+              <p className="text-red-700 dark:text-red-400 text-xs mt-0.5">
+                Cash balance ({selectedCurrencyCode} {selectedCashBalance.toLocaleString("en", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) is less than the purchase amount.
+              </p>
             </div>
           )}
 
@@ -558,7 +632,7 @@ export function BuySellDialog({
           <Button variant="outline" onClick={() => handleOpenChange(false)}>Cancel</Button>
           <Button
             onClick={() => void handleSubmit()}
-            disabled={saving || (isTicker ? !tickerTotal : !amount) || !currencyId}
+            disabled={saving || (isTicker ? !tickerTotal : !amount) || !currencyId || insufficientCashBalance}
             className={mode === "sell" ? "bg-rose-600 hover:bg-rose-700 text-white" : ""}
           >
             {saving ? "Recording…" : mode === "buy" ? "Record purchase" : "Record sale"}

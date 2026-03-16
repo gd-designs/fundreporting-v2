@@ -10,6 +10,14 @@ export type EntityAsset = {
   order: number | null
   investable: "investable_cash" | "investable_convert" | "non_investable" | "equity_stake" | null
   capTableShareholder: string | null
+  shareholder: {
+    id: string
+    name: string | null
+    email: string | null
+    role: string | null
+    type: string | null
+    entityName: string | null
+  } | null
   taxable: "taxable" | "tax_deferred" | "tax_free" | null
   notes: string | null
   countryId: number | null
@@ -83,6 +91,23 @@ export function mapXanoAsset(raw: unknown): EntityAsset | null {
         ? item.investable
         : null,
     capTableShareholder: typeof item.cap_table_shareholder === "string" && item.cap_table_shareholder ? item.cap_table_shareholder : null,
+    shareholder: (() => {
+      const sh = item._cap_table_shareholder as Record<string, unknown> | undefined
+      if (!sh || typeof sh.id !== "string") return null
+      const shEntity = sh._entity as Record<string, unknown> | undefined
+      const company = shEntity?._company as Record<string, unknown> | undefined
+      const fund = shEntity?._fund as Record<string, unknown> | undefined
+      const assetMgr = shEntity?._asset_manager as Record<string, unknown> | undefined
+      const entityName = toStr(company?.name || fund?.name || assetMgr?.name) || null
+      return {
+        id: sh.id,
+        name: typeof sh.name === "string" ? sh.name : null,
+        email: typeof sh.email === "string" ? sh.email : null,
+        role: typeof sh.role === "string" ? sh.role : null,
+        type: typeof sh.type === "string" ? sh.type : null,
+        entityName,
+      }
+    })(),
     taxable:
       item.taxable === "taxable" ||
       item.taxable === "tax_deferred" ||

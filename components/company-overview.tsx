@@ -182,6 +182,17 @@ export function CompanyOverview({
     () => liabilities.reduce((s, l) => s + getOutstanding(l, paidMap.get(l.id) ?? 0), 0),
     [liabilities, paidMap],
   )
+
+  // Write computed stats to server cache for dashboard entity cards
+  React.useEffect(() => {
+    if (loading || assetBalances.size === 0) return
+    fetch(`/api/entity-stats/${entityUUID}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assetsValue: netAssets, liabilitiesValue: debts, assetsCount: assets.length }),
+    }).catch(() => {})
+  }, [loading, entityUUID, netAssets, debts, assets.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const cashOnHand = React.useMemo(
     () =>
       assets

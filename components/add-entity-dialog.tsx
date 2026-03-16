@@ -79,10 +79,18 @@ function CurrencyField({ currencies, value, onChange }: { currencies: Currency[]
   )
 }
 
-export function AddEntityDialog({ children }: { children: React.ReactNode }) {
+export function AddEntityDialog({
+  children,
+  defaultType,
+  onCreated,
+}: {
+  children: React.ReactNode
+  defaultType?: EntityType
+  onCreated?: (entity: Record<string, unknown>) => void
+}) {
   const router = useRouter()
   const [open, setOpen] = React.useState(false)
-  const [type, setType] = React.useState<EntityType | "">("")
+  const [type, setType] = React.useState<EntityType | "">(defaultType ?? "")
   const [forcedPortfolio, setForcedPortfolio] = React.useState(false)
   const [name, setName] = React.useState("")
   const [fields, setFields] = React.useState<Record<string, string>>({})
@@ -99,12 +107,12 @@ export function AddEntityDialog({ children }: { children: React.ReactNode }) {
       fetch("/api/countries").then(r => r.ok ? r.json() : []),
     ]).then(([entities, cur, cou]) => {
       const noEntities = Array.isArray(entities) && entities.length === 0
-      setForcedPortfolio(noEntities)
-      setType(noEntities ? "portfolio" : "")
+      setForcedPortfolio(noEntities || !!defaultType)
+      setType(noEntities || defaultType ? (defaultType ?? "portfolio") : "")
       setCurrencies(cur)
       setCountries(cou)
     }).catch(() => {})
-  }, [open])
+  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function reset() {
     setType("")
@@ -142,8 +150,12 @@ export function AddEntityDialog({ children }: { children: React.ReactNode }) {
     reset()
     setOpen(false)
     notifyEntitiesUpdate()
-    router.refresh()
-    router.push(`/${TYPE_SLUGS[type]}/${data.id}`)
+    if (onCreated) {
+      onCreated(data)
+    } else {
+      router.refresh()
+      router.push(`/${TYPE_SLUGS[type]}/${data.id}`)
+    }
   }
 
   return (

@@ -20,12 +20,15 @@ export async function getEntities(): Promise<UnifiedEntity[]> {
         const type = e.type as EntityType
         const sub = e[`_${type}`] as Record<string, unknown> | null | undefined
         if (!sub) return null
+        const countryAddon = sub._country as { id: number; name?: string; code?: string } | null | undefined
         return {
           ...sub,
           id: sub.id as string,
           entity: e.id as string,
           type,
           created_at: e.created_at as string,
+          country: countryAddon?.name ?? sub.country ?? undefined,
+          _role: (e._role as UnifiedEntity["_role"]) ?? null,
         } as UnifiedEntity
       })
       .filter((e): e is UnifiedEntity => e !== null)

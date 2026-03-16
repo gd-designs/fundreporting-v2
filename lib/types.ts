@@ -11,9 +11,11 @@ export type UnifiedEntity = {
   name: string | null
   created_at: string
   type: EntityType
+  _role?: "owner" | "ubo" | "stakeholder" | "investor" | null
   // type-specific optional fields
   currency?: number        // FK to currency table
   _currency?: { id: number; code: string; name: string } | null
+  _country?: { id: number; name?: string; code?: string } | null
   inception_date?: string
   registration_number?: string
   country?: string | number
@@ -57,6 +59,7 @@ export type AssetClass = {
 
 export type EntitySnapshot = {
   entity: UnifiedEntity
+  assetsValue: number
   netValue: number
   assetsCount: number
   liabilitiesValue: number
@@ -75,9 +78,27 @@ export type DashboardTotals = {
   documents: number
 }
 
+export type Task = {
+  id: string
+  title?: string | null
+  status?: "todo" | "in_progress" | "done" | "cancelled" | null
+  priority?: "low" | "medium" | "high" | null
+  due_date?: number | null
+  entity?: string | null
+  created_at?: number | null
+}
+
+export type Document = {
+  id: string
+  name?: string | null
+  entity?: string | null
+  created_at?: number | null
+  object_type?: string | null
+}
+
 export type DashboardSnapshot = {
   entitySnapshots: EntitySnapshot[]
-  tasks: never[]
-  documents: never[]
+  tasks: Task[]
+  documents: Document[]
   totals: DashboardTotals
 }

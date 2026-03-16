@@ -144,7 +144,7 @@ export function CapitalCallReceive({ capitalCall, entityUUID, currencyCode = "EU
           ...(cashCurrencyId != null ? { currency: cashCurrencyId } : {}),
           amount: parsedAmount,
           source: "cap",
-          source_id: capitalCall.id,
+          source_id: capitalCall._cap_table_entry?.shareholder ?? capitalCall.id,
         }),
       });
       if (!entryRes.ok) throw new Error(await entryRes.text());

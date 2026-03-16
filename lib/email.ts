@@ -5,7 +5,8 @@ function getResend() {
 }
 
 const FROM = process.env.RESEND_FROM_EMAIL ?? "noreply@fundreporting.com";
-const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "";
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL
+  ?? (process.env.NEXT_PUBLIC_VERCEL_URL ? `https://${process.env.NEXT_PUBLIC_VERCEL_URL}` : "");
 
 function emailLayout(title: string, bodyRows: string): string {
   return `<!DOCTYPE html>

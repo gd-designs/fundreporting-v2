@@ -2,8 +2,9 @@ import { getAuthToken } from "@/lib/auth"
 
 export type Notification = {
   id: string
-  type: "capital_call" | string
+  type: "capital_call" | "cap_invite" | string
   resource_id: string | null
+  task: string | null
   title: string | null
   body: string | null
   read: boolean | null

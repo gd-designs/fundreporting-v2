@@ -66,7 +66,13 @@ export function NotificationBell() {
         prev.map((x) => x.id === n.id ? { ...x, read: true } : x)
       )
     }
-    router.push("/my-capital-calls")
+    if (n.task) {
+      router.push(`/tasks?task=${n.task}`)
+    } else if (n.type === "capital_call") {
+      router.push("/my-capital-calls")
+    } else {
+      router.push("/tasks")
+    }
   }
 
   async function markAllRead() {
@@ -142,10 +148,10 @@ export function NotificationBell() {
         {visible.length > 0 && (
           <div className="border-t px-4 py-2">
             <button
-              onClick={() => { setOpen(false); router.push("/my-capital-calls") }}
+              onClick={() => { setOpen(false); router.push("/tasks") }}
               className="text-xs text-primary hover:underline"
             >
-              View all capital calls
+              View all tasks
             </button>
           </div>
         )}

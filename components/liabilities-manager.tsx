@@ -44,7 +44,7 @@ function formatDate(ms: number | null | undefined): string {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function LiabilitiesManager({ entityUUID, initialLiabilityId }: { entityUUID: string; initialLiabilityId?: string }) {
+export function LiabilitiesManager({ entityUUID, initialLiabilityId, allowNewMoneyIn = false }: { entityUUID: string; initialLiabilityId?: string; allowNewMoneyIn?: boolean }) {
   const [liabilities, setLiabilities] = React.useState<Liability[]>([])
   const [assetMap, setAssetMap] = React.useState<Map<string, EntityAsset>>(new Map())
   const [paidMap, setPaidMap] = React.useState<Map<string, PaidInfo>>(new Map())
@@ -126,6 +126,17 @@ export function LiabilitiesManager({ entityUUID, initialLiabilityId }: { entityU
     const paid = paidMap.get(l.id)
     return s + getOutstanding(l, paid?.count ?? 0)
   }, 0)
+
+  // Cache liabilities value for dashboard entity cards
+  React.useEffect(() => {
+    if (loading) return
+    fetch(`/api/entity-stats/${entityUUID}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ liabilitiesValue: totalOutstanding }),
+    }).catch(() => {})
+  }, [loading, entityUUID, totalOutstanding]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const avgRate = liabilities.length > 0
     ? liabilities.reduce((s, l) => s + (l.interest_rate ?? 0), 0) / liabilities.filter((l) => l.interest_rate != null).length
     : 0
@@ -149,6 +160,7 @@ export function LiabilitiesManager({ entityUUID, initialLiabilityId }: { entityU
       onOpenChange={(v) => { if (!v) setSheetLiability(null) }}
       assetName={sheetLiability?.asset ? assetMap.get(sheetLiability.asset)?.name : null}
       defaultTab={sheetDefaultTab}
+      allowNewMoneyIn={allowNewMoneyIn}
     />
     <div className="space-y-6">
 

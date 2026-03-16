@@ -7,7 +7,10 @@ export type ShareClass = {
   voting_rights: boolean | null
   liquidation_preference: number | null
   liquidation_rank: number | null
-  price_per_share?: number | null
+  current_nav?: number | null
+  management_fee?: number | null
+  carried_interest?: number | null
+  preferred_return?: number | null
   notes: string | null
   created_at: number
 }
@@ -70,7 +73,7 @@ export type CapitalCall = {
   created_at: number
   share_class?: string | null
   _entity?: CapitalCallEntityAddon | null
-  _share_class?: { id: string; name?: string | null; price_per_share?: number | null } | null
+  _share_class?: { id: string; name?: string | null; current_nav?: number | null } | null
   _cap_table_entry?: {
     id: string
     shareholder?: string | null
