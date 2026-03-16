@@ -59,7 +59,7 @@ export function ShareholderSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="overflow-y-auto w-[480px]! p-0">
+      <SheetContent side="right" className="overflow-y-auto w-120! p-0">
         <div className="flex flex-col">
           <SheetHeader className="shrink-0 px-4 pt-4 pb-3 border-b">
             <div className="flex items-center gap-2">
