@@ -48,44 +48,32 @@ async function notifyLp(token: string, currentUserId: number, call: Record<strin
   const base = process.env.PLATFORM_API_URL!
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }
 
-  // 1. Fetch cap_table_entry → shareholder UUID
-  const entryRes = await fetch(`${base}/cap_table_entry/${call.cap_table_entry}`, { headers })
-  if (!entryRes.ok) return
-  const entry = await entryRes.json() as Record<string, unknown>
-  if (!entry.shareholder) return
+  // 1–3. Fetch the full capital call record (includes _cap_table_entry._shareholder and _entity sub-tables)
+  const callRes = await fetch(`${base}/capital_call/${call.id}`, { headers })
+  if (!callRes.ok) return
+  const fullCall = await callRes.json() as Record<string, unknown>
 
-  // 2. Fetch shareholder → user int + email + name
-  const shRes = await fetch(`${base}/cap_table_shareholder/${entry.shareholder}`, { headers })
-  if (!shRes.ok) return
-  const sh = await shRes.json() as Record<string, unknown>
-  if (!sh.user || !sh.email) return
+  // Shareholder from nested addon
+  const entry = fullCall._cap_table_entry as Record<string, unknown> | null
+  if (!entry) return
+  const sh = entry._shareholder as Record<string, unknown> | null
+  if (!sh?.user || !sh?.email) return
 
-  // 3. Fetch entity name (name lives on sub-table, not base entity record)
-  let entityName = "your fund"
-  if (call.entity) {
-    const entityRes = await fetch(`${base}/entity/${call.entity}`, { headers })
-    if (entityRes.ok) {
-      const entity = await entityRes.json() as Record<string, unknown>
-      const type = entity.type as string | undefined
-      if (type) {
-        const subRes = await fetch(`${base}/${type}?entity=${call.entity}`, { headers })
-        if (subRes.ok) {
-          const subData = await subRes.json() as Array<Record<string, unknown>> | Record<string, unknown>
-          const sub = Array.isArray(subData) ? subData[0] : subData
-          if (sub?.name) entityName = sub.name as string
-        }
-      }
-    }
-  }
+  // Entity name from nested addon (all correctly filtered by entity UUID)
+  const entityAddon = fullCall._entity as Record<string, unknown> | null
+  const company = entityAddon?._company as Record<string, unknown> | null
+  const fund = entityAddon?._fund as Record<string, unknown> | null
+  const assetMgr = entityAddon?._asset_manager as Record<string, unknown> | null
+  const entityName = ((company?.name ?? fund?.name ?? assetMgr?.name) as string | undefined) ?? "your fund"
 
-  // 4. Send email
+  // 4. Send email (non-blocking — task + notification must still be created even if email fails)
   await sendCapitalCallEmail({
     toEmail: sh.email as string,
     toName: (sh.name as string | null) ?? null,
     entityName,
     amount: (call.amount as number | null) ?? null,
     dueDate: (call.due_date as number | null) ?? null,
-  })
+  }).catch(() => {})
 
   // 5. Stamp notified_at on the capital call
   await fetch(`${base}/capital_call/${call.id}`, {
