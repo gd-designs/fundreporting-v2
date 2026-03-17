@@ -292,13 +292,20 @@ export default async function DashboardPage() {
                               <p className="text-muted-foreground text-xs">
                                 {typeLabel(row.entity)}
                               </p>
-                              <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 capitalize">
-                                {!row.entity._role || row.entity._role === "owner"
-                                  ? "Owner"
-                                  : row.entity._role === "ubo"
-                                  ? "UBO"
-                                  : row.entity._role.replace("_", " ")}
-                              </span>
+                              {!row.entity._access?.length ? (
+                                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                                  Owner
+                                </span>
+                              ) : (
+                                row.entity._access.map((a, i) => (
+                                  <span key={i} className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 capitalize">
+                                    {a.type === "shareholder"
+                                      ? a.role === "ubo" ? "UBO" : (a.role?.replace(/_/g, " ") ?? "Shareholder")
+                                      : a.role?.replace(/_/g, " ") ?? "Member"}
+                                    {a.department ? ` · ${a.department.replace(/_/g, " ")}` : ""}
+                                  </span>
+                                ))
+                              )}
                             </div>
                           </div>
                         </div>

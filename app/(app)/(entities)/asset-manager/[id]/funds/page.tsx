@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation"
 import { getAuthToken } from "@/lib/auth"
-import { AssetManagerOverview } from "@/components/asset-manager-overview"
+import { FundsManager } from "@/components/funds-manager"
 
 async function getAssetManager(id: string) {
   const token = await getAuthToken()
@@ -10,7 +10,7 @@ async function getAssetManager(id: string) {
     cache: "no-store",
   })
   if (!res.ok) return null
-  return res.json() as Promise<{ id: string; entity: string; name?: string | null; currency?: number | null; country?: number | null; aum?: number | null }>
+  return res.json() as Promise<{ id: string; name?: string | null; currency?: number | null; country?: number | null }>
 }
 
 async function getFunds(assetManagerId: string) {
@@ -25,26 +25,19 @@ async function getFunds(assetManagerId: string) {
   return Array.isArray(data) ? data : []
 }
 
-export default async function AssetManagerPage({
-  params,
-}: {
-  params: Promise<{ id: string }>
-}) {
+export default async function FundsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   const [assetManager, funds] = await Promise.all([getAssetManager(id), getFunds(id)])
   if (!assetManager) notFound()
 
   return (
     <div className="p-6 md:p-8">
-      <div className="mx-auto">
-        <AssetManagerOverview
-          assetManagerId={id}
-          assetManagerName={assetManager.name}
-          initialFunds={funds}
-          defaultCurrency={assetManager.currency}
-          defaultCountry={assetManager.country}
-        />
-      </div>
+      <FundsManager
+        assetManagerId={id}
+        initialFunds={funds}
+        defaultCurrency={assetManager.currency}
+        defaultCountry={assetManager.country}
+      />
     </div>
   )
 }

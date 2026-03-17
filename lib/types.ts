@@ -11,7 +11,7 @@ export type UnifiedEntity = {
   name: string | null
   created_at: string
   type: EntityType
-  _role?: "owner" | "ubo" | "stakeholder" | "investor" | null
+  _access?: Array<{ type: "shareholder" | "team_member"; role: string | null; department?: string | null }> | null
   // type-specific optional fields
   currency?: number        // FK to currency table
   _currency?: { id: number; code: string; name: string } | null

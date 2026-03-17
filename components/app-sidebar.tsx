@@ -146,6 +146,7 @@ const ASSET_MANAGER_NAV: { label: string; items: { title: string; href: string; 
   {
     label: "Managers",
     items: [
+      { title: "Funds", href: "/funds", icon: Landmark },
       { title: "Investors", href: "/investors", icon: Users2 },
       { title: "Assets", href: "/assets", icon: Briefcase },
       { title: "Compliance", href: "/compliance", icon: Shield },

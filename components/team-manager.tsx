@@ -82,9 +82,11 @@ function formatDate(ts: number | null) {
 
 function AddMemberDialog({
   entityUUID,
+  entityName,
   onAdded,
 }: {
   entityUUID: string
+  entityName?: string | null
   onAdded: (member: Member) => void
 }) {
   const [open, setOpen] = React.useState(false)
@@ -108,6 +110,7 @@ function AddMemberDialog({
           role,
           department: department || null,
           joined_at: Date.now(),
+          entityName: entityName ?? null,
         }),
       })
       const data = await res.json()
@@ -278,7 +281,7 @@ function EditMemberDialog({
   )
 }
 
-export function TeamManager({ entityUUID }: { entityUUID: string }) {
+export function TeamManager({ entityUUID, entityName }: { entityUUID: string; entityName?: string | null }) {
   const [members, setMembers] = React.useState<Member[]>([])
   const [loading, setLoading] = React.useState(true)
 
@@ -307,7 +310,7 @@ export function TeamManager({ entityUUID }: { entityUUID: string }) {
           <h2 className="text-lg font-semibold">Team</h2>
           <p className="text-sm text-muted-foreground mt-0.5">Manage access and roles for this asset manager.</p>
         </div>
-        <AddMemberDialog entityUUID={entityUUID} onAdded={(m) => setMembers((prev) => [...prev, m])} />
+        <AddMemberDialog entityUUID={entityUUID} entityName={entityName} onAdded={(m) => setMembers((prev) => [...prev, m])} />
       </div>
 
       {loading ? (

@@ -105,7 +105,7 @@ const OBJECT_TYPES: Record<string, Array<{ value: string; label: string }>> = {
   company: [{ value: "asset", label: "Asset" }],
   family_office: [{ value: "asset", label: "Asset" }],
   fund: [{ value: "asset", label: "Asset" }],
-}
+};
 
 const OBJECT_TYPE_LABELS: Record<string, string> = {
   asset: "Asset",
@@ -117,7 +117,8 @@ const OBJECT_TYPE_LABELS: Record<string, string> = {
   liability: "Liability",
   document: "Document",
   compliance_record: "Compliance",
-}
+  team_invite: "Team Invite",
+};
 
 const ENTITY_HREFS: Record<string, string> = {
   portfolio: "/portfolio",
@@ -190,14 +191,22 @@ function AssignedAvatars({ users }: { users: AssignedUser[] }) {
         <HoverCard key={u.id} openDelay={200}>
           <HoverCardTrigger asChild>
             <Avatar size="sm" className="cursor-default">
-              {u.avatar?.url && <AvatarImage src={u.avatar.url} alt={u.name ?? ""} />}
-              <AvatarFallback className="text-[10px]">{initials(u)}</AvatarFallback>
+              {u.avatar?.url && (
+                <AvatarImage src={u.avatar.url} alt={u.name ?? ""} />
+              )}
+              <AvatarFallback className="text-[10px]">
+                {initials(u)}
+              </AvatarFallback>
             </Avatar>
           </HoverCardTrigger>
           <HoverCardContent className="w-auto min-w-40 p-3">
             {u.name && <p className="text-sm font-medium">{u.name}</p>}
-            {u.email && <p className="text-xs text-muted-foreground">{u.email}</p>}
-            {!u.name && !u.email && <p className="text-xs text-muted-foreground">User {u.id}</p>}
+            {u.email && (
+              <p className="text-xs text-muted-foreground">{u.email}</p>
+            )}
+            {!u.name && !u.email && (
+              <p className="text-xs text-muted-foreground">User {u.id}</p>
+            )}
           </HoverCardContent>
         </HoverCard>
       ))}
@@ -243,9 +252,12 @@ function TaskFormDialog({
     dueDate: "",
   });
   const [selectedEntityId, setSelectedEntityId] = React.useState<string>("");
-  const [selectedObjectType, setSelectedObjectType] = React.useState<string>("");
+  const [selectedObjectType, setSelectedObjectType] =
+    React.useState<string>("");
   const [selectedObjectId, setSelectedObjectId] = React.useState<string>("");
-  const [objects, setObjects] = React.useState<Array<{ id: string; name: string }>>([]);
+  const [objects, setObjects] = React.useState<
+    Array<{ id: string; name: string }>
+  >([]);
   const [objectsLoading, setObjectsLoading] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -255,7 +267,9 @@ function TaskFormDialog({
     () => entities?.find((e) => e.entity === selectedEntityId) ?? null,
     [entities, selectedEntityId],
   );
-  const objectTypeOptions = selectedEntity ? (OBJECT_TYPES[selectedEntity.type] ?? []) : [];
+  const objectTypeOptions = selectedEntity
+    ? (OBJECT_TYPES[selectedEntity.type] ?? [])
+    : [];
 
   React.useEffect(() => {
     if (open) {
@@ -299,7 +313,10 @@ function TaskFormDialog({
         const arr = Array.isArray(data) ? data : [];
         setObjects(
           (arr as Record<string, unknown>[])
-            .map((o) => ({ id: String(o.id ?? ""), name: String(o.name ?? o.title ?? o.id ?? "") }))
+            .map((o) => ({
+              id: String(o.id ?? ""),
+              name: String(o.name ?? o.title ?? o.id ?? ""),
+            }))
             .filter((o) => o.id),
         );
       })
@@ -434,9 +451,14 @@ function TaskFormDialog({
           </div>
           <DatePickerInput
             label="Due date"
-            value={form.dueDate ? new Date(form.dueDate + "T00:00:00") : undefined}
+            value={
+              form.dueDate ? new Date(form.dueDate + "T00:00:00") : undefined
+            }
             onChange={(date) => {
-              if (!date) { set("dueDate", ""); return; }
+              if (!date) {
+                set("dueDate", "");
+                return;
+              }
               const y = date.getFullYear();
               const m = String(date.getMonth() + 1).padStart(2, "0");
               const d = String(date.getDate()).padStart(2, "0");
@@ -506,11 +528,17 @@ function TaskFormDialog({
               ) : (
                 <Select
                   value={selectedObjectId || "none"}
-                  onValueChange={(v) => setSelectedObjectId(v === "none" ? "" : v)}
+                  onValueChange={(v) =>
+                    setSelectedObjectId(v === "none" ? "" : v)
+                  }
                   disabled={objects.length === 0}
                 >
                   <SelectTrigger className="w-full">
-                    <SelectValue placeholder={objects.length === 0 ? "No items available" : "Select…"} />
+                    <SelectValue
+                      placeholder={
+                        objects.length === 0 ? "No items available" : "Select…"
+                      }
+                    />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">None</SelectItem>
@@ -565,7 +593,11 @@ function TaskRow({
 }) {
   const overdue = isOverdue(task.dueDate, task.status);
   const isDone = task.status === "done";
-  const canAct = currentUserId == null || task.owner == null || task.owner === currentUserId || task.assignedTo.includes(currentUserId);
+  const canAct =
+    currentUserId == null ||
+    task.owner == null ||
+    task.owner === currentUserId ||
+    task.assignedTo.includes(currentUserId);
 
   return (
     <div
@@ -573,16 +605,28 @@ function TaskRow({
     >
       {/* Status toggle */}
       <button
-        onClick={(e) => { e.stopPropagation(); if (canAct) onStatusToggle(task); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (canAct) onStatusToggle(task);
+        }}
         disabled={!canAct}
         className="mt-0.5 shrink-0 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        title={!canAct ? "Only the assignee can change this task" : isDone ? "Reopen" : "Mark done"}
+        title={
+          !canAct
+            ? "Only the assignee can change this task"
+            : isDone
+              ? "Reopen"
+              : "Mark done"
+        }
       >
         <StatusIcon status={task.status} />
       </button>
 
       {/* Content */}
-      <div className="min-w-0 flex-1 cursor-pointer" onClick={() => onOpen(task)}>
+      <div
+        className="min-w-0 flex-1 cursor-pointer"
+        onClick={() => onOpen(task)}
+      >
         <div className="flex items-center gap-2 flex-wrap">
           <p
             className={`text-sm font-medium ${isDone ? "line-through text-muted-foreground" : ""}`}
@@ -635,42 +679,44 @@ function TaskRow({
       )}
 
       {/* Actions */}
-      {canAct && <div className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="size-7">
-              <MoreHorizontal className="size-3.5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={() => onEdit(task)}>
-              Edit
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            {STATUS_ORDER.filter((s) => s !== task.status).map((s) => (
-              <DropdownMenuItem
-                key={s}
-                onClick={() =>
-                  onStatusToggle({
-                    ...task,
-                    status: s === task.status ? "todo" : s,
-                  })
-                }
-              >
-                Move to {STATUS_LABELS[s]}
+      {canAct && (
+        <div className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="size-7">
+                <MoreHorizontal className="size-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => onEdit(task)}>
+                Edit
               </DropdownMenuItem>
-            ))}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className="text-destructive"
-              onClick={() => onDelete(task.id)}
-            >
-              <Trash2 className="size-3.5" />
-              Delete
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>}
+              <DropdownMenuSeparator />
+              {STATUS_ORDER.filter((s) => s !== task.status).map((s) => (
+                <DropdownMenuItem
+                  key={s}
+                  onClick={() =>
+                    onStatusToggle({
+                      ...task,
+                      status: s === task.status ? "todo" : s,
+                    })
+                  }
+                >
+                  Move to {STATUS_LABELS[s]}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-destructive"
+                onClick={() => onDelete(task.id)}
+              >
+                <Trash2 className="size-3.5" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )}
     </div>
   );
 }
@@ -733,7 +779,9 @@ function StatusGroup({
               : null;
             const objectTag =
               task.objectType && task.objectId
-                ? (objectNameMap.get(task.objectId) ?? OBJECT_TYPE_LABELS[task.objectType] ?? task.objectType)
+                ? (objectNameMap.get(task.objectId) ??
+                  OBJECT_TYPE_LABELS[task.objectType] ??
+                  task.objectType)
                 : null;
             return (
               <TaskRow
@@ -768,6 +816,7 @@ function KanbanCard({
   onDelete,
   onMoveStatus,
   onOpen,
+  currentUserId,
 }: {
   task: Task;
   entityName: string | null;
@@ -778,13 +827,23 @@ function KanbanCard({
   onDelete: (id: string) => void;
   onMoveStatus: (task: Task, status: TaskStatus) => void;
   onOpen: (task: Task) => void;
+  currentUserId: number | null;
 }) {
   const overdue = isOverdue(task.dueDate, task.status);
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: task.id,
-    data: { task },
-  });
-  const style = transform ? { transform: CSS.Translate.toString(transform) } : undefined;
+  const canAct =
+    currentUserId == null ||
+    task.owner == null ||
+    task.owner === currentUserId ||
+    task.assignedTo.includes(currentUserId);
+  const { attributes, listeners, setNodeRef, transform, isDragging } =
+    useDraggable({
+      id: task.id,
+      data: { task },
+      disabled: !canAct,
+    });
+  const style = transform
+    ? { transform: CSS.Translate.toString(transform) }
+    : undefined;
 
   return (
     <div
@@ -794,7 +853,7 @@ function KanbanCard({
       {...listeners}
       className={`group rounded-lg border bg-card p-3 shadow-sm space-y-2 select-none ${
         isDragging && !overlay ? "opacity-40" : ""
-      } ${overlay ? "shadow-lg rotate-1 cursor-grabbing" : "hover:shadow-md transition-shadow cursor-grab"}`}
+      } ${overlay ? "shadow-lg rotate-1 cursor-grabbing" : canAct ? "hover:shadow-md transition-shadow cursor-grab" : "cursor-default"}`}
       onClick={() => onOpen(task)}
     >
       <div className="flex items-start justify-between gap-1">
@@ -803,7 +862,7 @@ function KanbanCard({
         >
           {task.title}
         </p>
-        <DropdownMenu>
+        {canAct && <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
@@ -833,7 +892,7 @@ function KanbanCard({
               Delete
             </DropdownMenuItem>
           </DropdownMenuContent>
-        </DropdownMenu>
+        </DropdownMenu>}
       </div>
 
       {task.description && (
@@ -876,7 +935,9 @@ function KanbanCard({
               <Calendar className="size-3 shrink-0" />
               {formatDue(task.dueDate)}
             </p>
-          ) : <span />}
+          ) : (
+            <span />
+          )}
           <AssignedAvatars users={task.assignedToUsers} />
         </div>
       )}
@@ -895,6 +956,7 @@ function KanbanColumn({
   onDelete,
   onMoveStatus,
   onOpen,
+  currentUserId,
 }: {
   status: TaskStatus;
   tasks: Task[];
@@ -904,6 +966,7 @@ function KanbanColumn({
   onDelete: (id: string) => void;
   onMoveStatus: (task: Task, status: TaskStatus) => void;
   onOpen: (task: Task) => void;
+  currentUserId: number | null;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: status });
 
@@ -914,7 +977,9 @@ function KanbanColumn({
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {STATUS_LABELS[status]}
         </span>
-        <span className="ml-auto text-xs text-muted-foreground">{tasks.length}</span>
+        <span className="ml-auto text-xs text-muted-foreground">
+          {tasks.length}
+        </span>
       </div>
       <div
         ref={setNodeRef}
@@ -923,11 +988,17 @@ function KanbanColumn({
         }`}
       >
         {tasks.map((task) => {
-          const entity = task.entityId ? entityMap.get(task.entityId) : undefined;
-          const entityHref = entity ? `${ENTITY_HREFS[entity.type] ?? ""}/${entity.id}` : null;
+          const entity = task.entityId
+            ? entityMap.get(task.entityId)
+            : undefined;
+          const entityHref = entity
+            ? `${ENTITY_HREFS[entity.type] ?? ""}/${entity.id}`
+            : null;
           const objectTag =
             task.objectType && task.objectId
-              ? (objectNameMap.get(task.objectId) ?? OBJECT_TYPE_LABELS[task.objectType] ?? task.objectType)
+              ? (objectNameMap.get(task.objectId) ??
+                OBJECT_TYPE_LABELS[task.objectType] ??
+                task.objectType)
               : null;
           return (
             <KanbanCard
@@ -940,6 +1011,7 @@ function KanbanColumn({
               onDelete={onDelete}
               onMoveStatus={onMoveStatus}
               onOpen={onOpen}
+              currentUserId={currentUserId}
             />
           );
         })}
@@ -963,6 +1035,7 @@ function KanbanBoard({
   onDelete,
   onMoveStatus,
   onOpen,
+  currentUserId,
 }: {
   groupedByStatus: Record<TaskStatus, Task[]>;
   entityMap: Map<string, UnifiedEntity>;
@@ -971,6 +1044,7 @@ function KanbanBoard({
   onDelete: (id: string) => void;
   onMoveStatus: (task: Task, status: TaskStatus) => void;
   onOpen: (task: Task) => void;
+  currentUserId: number | null;
 }) {
   return (
     <div className="flex gap-4 overflow-x-auto pb-4 -mx-1 px-1">
@@ -985,6 +1059,7 @@ function KanbanBoard({
           onDelete={onDelete}
           onMoveStatus={onMoveStatus}
           onOpen={onOpen}
+          currentUserId={currentUserId}
         />
       ))}
     </div>
@@ -1018,19 +1093,26 @@ export function TaskManager({
   const [view, setView] = React.useState<"list" | "board">("list");
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [editTask, setEditTask] = React.useState<Task | null>(null);
-  const [objectNameMap, setObjectNameMap] = React.useState<Map<string, string>>(new Map());
+  const [objectNameMap, setObjectNameMap] = React.useState<Map<string, string>>(
+    new Map(),
+  );
   const [draggingTask, setDraggingTask] = React.useState<Task | null>(null);
   const [sheetTask, setSheetTask] = React.useState<SheetTask | null>(null);
   const [sheetOpen, setSheetOpen] = React.useState(false);
   const [currentUserId, setCurrentUserId] = React.useState<number | null>(null);
 
   React.useEffect(() => {
-    fetch("/api/auth/me").then(r => r.ok ? r.json() : null).then(u => {
-      if (u?.id) setCurrentUserId(u.id)
-    }).catch(() => {})
-  }, [])
+    fetch("/api/auth/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((u) => {
+        if (u?.id) setCurrentUserId(u.id);
+      })
+      .catch(() => {});
+  }, []);
 
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+  );
 
   // entity UUID → entity map
   const entityMap = React.useMemo(
@@ -1061,22 +1143,36 @@ export function TaskManager({
 
   // Resolve object names for tasks that have objectType + objectId
   React.useEffect(() => {
-    const types = new Set(tasks.map((t) => t.objectType).filter(Boolean) as string[]);
-    if (types.size === 0) { setObjectNameMap(new Map()); return; }
+    const types = new Set(
+      tasks.map((t) => t.objectType).filter(Boolean) as string[],
+    );
+    if (types.size === 0) {
+      setObjectNameMap(new Map());
+      return;
+    }
     const newMap = new Map<string, string>();
     const fetches: Promise<void>[] = [];
     function addFetch(url: string) {
       fetches.push(
-        fetch(url).then((r) => r.json()).then((data: unknown) => {
-          if (Array.isArray(data)) {
-            (data as Record<string, unknown>[]).forEach((o) => {
-              if (o.id && (o.name ?? o.title)) newMap.set(String(o.id), String(o.name ?? o.title));
-            });
-          }
-        }).catch(() => {}),
+        fetch(url)
+          .then((r) => r.json())
+          .then((data: unknown) => {
+            if (Array.isArray(data)) {
+              (data as Record<string, unknown>[]).forEach((o) => {
+                if (o.id && (o.name ?? o.title))
+                  newMap.set(String(o.id), String(o.name ?? o.title));
+              });
+            }
+          })
+          .catch(() => {}),
       );
     }
-    if (types.has("asset")) addFetch(entityId ? `/api/assets?entity=${encodeURIComponent(entityId)}` : "/api/assets");
+    if (types.has("asset"))
+      addFetch(
+        entityId
+          ? `/api/assets?entity=${encodeURIComponent(entityId)}`
+          : "/api/assets",
+      );
     if (types.has("fund")) addFetch("/api/funds");
     if (types.has("investor_lead")) addFetch("/api/investor-leads");
     void Promise.all(fetches).then(() => setObjectNameMap(new Map(newMap)));
@@ -1194,19 +1290,27 @@ export function TaskManager({
       due_date: task.dueDate,
       entity: task.entityId,
       created_at: task.createdAt,
+      object_type: task.objectType,
+      object_id: task.objectId,
     });
     setSheetOpen(true);
   }
   function handleSheetUpdated(updated: SheetTask) {
     setSheetTask(updated);
-    setTasks((prev) => prev.map((t) => t.id === updated.id ? {
-      ...t,
-      title: updated.title ?? t.title,
-      description: updated.description ?? null,
-      status: (updated.status as Task["status"]) ?? t.status,
-      priority: (updated.priority as Task["priority"]) ?? null,
-      dueDate: updated.due_date ?? null,
-    } : t));
+    setTasks((prev) =>
+      prev.map((t) =>
+        t.id === updated.id
+          ? {
+              ...t,
+              title: updated.title ?? t.title,
+              description: updated.description ?? null,
+              status: (updated.status as Task["status"]) ?? t.status,
+              priority: (updated.priority as Task["priority"]) ?? null,
+              dueDate: updated.due_date ?? null,
+            }
+          : t,
+      ),
+    );
   }
   function handleSheetDeleted(id: string) {
     setTasks((prev) => prev.filter((t) => t.id !== id));
@@ -1353,29 +1457,39 @@ export function TaskManager({
               onEdit={openEdit}
               onDelete={handleDelete}
               onOpen={openSheet}
+              currentUserId={currentUserId}
             />
             <DragOverlay>
-              {draggingTask ? (() => {
-                const entity = draggingTask.entityId ? entityMap.get(draggingTask.entityId) : undefined;
-                const entityHref = entity ? `${ENTITY_HREFS[entity.type] ?? ""}/${entity.id}` : null;
-                const objectTag =
-                  draggingTask.objectType && draggingTask.objectId
-                    ? (objectNameMap.get(draggingTask.objectId) ?? OBJECT_TYPE_LABELS[draggingTask.objectType] ?? draggingTask.objectType)
-                    : null;
-                return (
-                  <KanbanCard
-                    task={draggingTask}
-                    entityName={entity?.name ?? null}
-                    entityHref={entityHref}
-                    objectTag={objectTag}
-                    overlay
-                    onEdit={openEdit}
-                    onDelete={handleDelete}
-                    onMoveStatus={handleMoveStatus}
-                    onOpen={openSheet}
-                  />
-                );
-              })() : null}
+              {draggingTask
+                ? (() => {
+                    const entity = draggingTask.entityId
+                      ? entityMap.get(draggingTask.entityId)
+                      : undefined;
+                    const entityHref = entity
+                      ? `${ENTITY_HREFS[entity.type] ?? ""}/${entity.id}`
+                      : null;
+                    const objectTag =
+                      draggingTask.objectType && draggingTask.objectId
+                        ? (objectNameMap.get(draggingTask.objectId) ??
+                          OBJECT_TYPE_LABELS[draggingTask.objectType] ??
+                          draggingTask.objectType)
+                        : null;
+                    return (
+                      <KanbanCard
+                        task={draggingTask}
+                        entityName={entity?.name ?? null}
+                        entityHref={entityHref}
+                        objectTag={objectTag}
+                        overlay
+                        onEdit={openEdit}
+                        onDelete={handleDelete}
+                        onMoveStatus={handleMoveStatus}
+                        onOpen={openSheet}
+                        currentUserId={currentUserId}
+                      />
+                    );
+                  })()
+                : null}
             </DragOverlay>
           </DndContext>
         ) : (

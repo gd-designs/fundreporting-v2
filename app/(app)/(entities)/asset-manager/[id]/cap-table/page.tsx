@@ -10,7 +10,7 @@ async function getRecord(id: string) {
     cache: "no-store",
   })
   if (!res.ok) return null
-  return res.json() as Promise<{ id: string; entity: string; name?: string | null; country?: string | null; _entity?: { owner?: number | null } | null }>
+  return res.json() as Promise<{ id: string; entity: string; name?: string | null; country?: string | null; _currency?: { id: number; code: string } | null; _entity?: { owner?: number | null } | null }>
 }
 
 export default async function CapTablePage({ params }: { params: Promise<{ id: string }> }) {
@@ -18,5 +18,5 @@ export default async function CapTablePage({ params }: { params: Promise<{ id: s
   const [record, currentUser] = await Promise.all([getRecord(id), getCurrentUser()])
   if (!record) notFound()
   const countryId = record.country ? Number(record.country) : null
-  return <CapTableManager entityUUID={record.entity} entityName={record.name ?? undefined} defaultCountryId={isNaN(countryId ?? NaN) ? null : countryId} variant="commitment" currentUserId={currentUser?.id} entityOwner={record._entity?.owner ?? null} />
+  return <CapTableManager entityUUID={record.entity} entityName={record.name ?? undefined} defaultCountryId={isNaN(countryId ?? NaN) ? null : countryId} variant="commitment" currencyCode={record._currency?.code} currentUserId={currentUser?.id} entityOwner={record._entity?.owner ?? null} />
 }

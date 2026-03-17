@@ -317,6 +317,38 @@ export function TaskSheet({
     }
   }
 
+  async function handleTeamInviteAction(accept: boolean) {
+    if (!task?.object_id) return
+    setActioning(true)
+    setError(null)
+    try {
+      const now = Date.now()
+      const patch = accept
+        ? { accepted: true, accepted_at: now }
+        : { rejected: true, rejected_at: now }
+      await fetch(`/api/entity-members/${task.object_id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      })
+      const newStatus = accept ? "done" : "cancelled"
+      const res = await fetch(`/api/tasks/${task.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: newStatus }),
+      })
+      if (!res.ok) throw new Error("Failed to update task")
+      const updated: Task = await res.json()
+      setTask(updated)
+      setStatus(updated.status ?? "")
+      onUpdated?.(updated)
+    } catch {
+      setError(`Failed to ${accept ? "accept" : "reject"} invitation.`)
+    } finally {
+      setActioning(false)
+    }
+  }
+
   async function handleCapitalCallPayment() {
     if (!task?.object_id || !capitalCall) return
     if (!paymentEntityId) { setError("Select a portfolio to pay from."); return }
@@ -644,7 +676,7 @@ export function TaskSheet({
                 <ThumbsDown className="size-3.5" />
                 Rejected
               </div>
-            ) : (
+            ) : canAct ? (
               <div className="flex gap-2">
                 <Button
                   onClick={() => handleCapInviteAction(true)}
@@ -664,6 +696,48 @@ export function TaskSheet({
                   Reject
                 </Button>
               </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Only the invited person can respond to this invitation.</p>
+            )}
+          </div>
+        )}
+
+        {/* Team invite action */}
+        {task.object_type === "team_invite" && (
+          <div className="px-6 py-4 border-b space-y-3">
+            <p className="text-sm font-medium">Respond to team invitation</p>
+            {status === "done" ? (
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-green-100 text-green-700 px-3 py-1.5 text-sm font-medium">
+                <ThumbsUp className="size-3.5" />
+                Accepted
+              </div>
+            ) : status === "cancelled" ? (
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-red-100 text-red-700 px-3 py-1.5 text-sm font-medium">
+                <ThumbsDown className="size-3.5" />
+                Rejected
+              </div>
+            ) : canAct ? (
+              <div className="flex gap-2">
+                <Button
+                  onClick={() => handleTeamInviteAction(true)}
+                  disabled={actioning}
+                  className="bg-green-600 hover:bg-green-700 text-white"
+                >
+                  <ThumbsUp className="size-3.5" />
+                  Accept
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => handleTeamInviteAction(false)}
+                  disabled={actioning}
+                  className="text-destructive hover:bg-destructive/10 hover:text-destructive border-destructive/30"
+                >
+                  <ThumbsDown className="size-3.5" />
+                  Reject
+                </Button>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">Only the invited person can respond to this invitation.</p>
             )}
           </div>
         )}

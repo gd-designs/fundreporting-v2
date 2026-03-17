@@ -1310,7 +1310,7 @@ export function AssetsManager({ entityUUID, baseCurrency: baseCurrencyProp, allo
                                       </DropdownMenuItem>
                                     </span>
                                   </TooltipTrigger>
-                                  <TooltipContent side="left" className="max-w-[200px]">
+                                  <TooltipContent side="left" className="max-w-50">
                                     New money in is only available on portfolio entities. Use capital calls to receive funds here.
                                   </TooltipContent>
                                 </Tooltip>

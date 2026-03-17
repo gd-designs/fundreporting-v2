@@ -198,13 +198,20 @@ function EntityCard({ entity }: { entity: UnifiedEntity }) {
           <span className="text-xs font-medium text-muted-foreground">
             {config.label}
           </span>
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 capitalize">
-            {!entity._role || entity._role === "owner"
-              ? "Owner"
-              : entity._role === "ubo"
-              ? "UBO"
-              : entity._role.replace("_", " ")}
-          </span>
+          {!entity._access?.length ? (
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+              Owner
+            </span>
+          ) : (
+            entity._access.map((a, i) => (
+              <span key={i} className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600 capitalize">
+                {a.type === "shareholder"
+                  ? a.role === "ubo" ? "UBO" : (a.role?.replace(/_/g, " ") ?? "Shareholder")
+                  : a.role?.replace(/_/g, " ") ?? "Member"}
+                {a.department ? ` · ${a.department.replace(/_/g, " ")}` : ""}
+              </span>
+            ))
+          )}
         </div>
         <ArrowUpRight className="size-4 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-foreground" />
       </div>
