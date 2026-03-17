@@ -1285,6 +1285,7 @@ export function AssetsManager({ entityUUID, baseCurrency: baseCurrencyProp, allo
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-44">
                           {isCashAsset ? (
+                            allowNewMoneyIn ? (
                             <MoneyInDialog
                               entityUUID={entityUUID}
                               assetId={asset.id}
@@ -1298,6 +1299,23 @@ export function AssetsManager({ entityUUID, baseCurrency: baseCurrencyProp, allo
                                 Money in
                               </DropdownMenuItem>
                             </MoneyInDialog>
+                            ) : (
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <span>
+                                      <DropdownMenuItem disabled>
+                                        <ArrowDownLeft className="size-3.5" />
+                                        Money in
+                                      </DropdownMenuItem>
+                                    </span>
+                                  </TooltipTrigger>
+                                  <TooltipContent side="left" className="max-w-[200px]">
+                                    New money in is only available on portfolio entities. Use capital calls to receive funds here.
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            )
                           ) : (
                             <>
                               <BuySellDialog
