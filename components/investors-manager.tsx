@@ -27,6 +27,7 @@ import {
   MoreHorizontal,
   Pencil,
   Trash2,
+  Lock,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -50,6 +51,7 @@ import {
 import { InvestorSheet } from "@/components/investor-sheet";
 import { FundInvestmentSheet } from "@/components/fund-investment-sheet";
 import { IssueCapitalCallDialog } from "@/components/issue-capital-call-dialog";
+import { CapitalCallReceive } from "@/components/capital-call-receive";
 
 type Fund = { id: string; name?: string | null; entity?: string | null };
 
@@ -314,22 +316,21 @@ function InvestorsTable({
     chId: string;
   } | null>(null);
 
-  React.useEffect(() => {
-    async function load() {
-      setLoading(true);
-      try {
-        const [sh, sc] = await Promise.all([
-          fetchCapTableShareholders(entityId),
-          fetchShareClasses(entityId),
-        ]);
-        setShareholders(sh.filter((s) => s.role === "investor"));
-        setShareClasses(sc);
-      } finally {
-        setLoading(false);
-      }
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      const [sh, sc] = await Promise.all([
+        fetchCapTableShareholders(entityId),
+        fetchShareClasses(entityId),
+      ]);
+      setShareholders(sh.filter((s) => s.role === "investor"));
+      setShareClasses(sc);
+    } finally {
+      setLoading(false);
     }
-    void load();
   }, [entityId]);
+
+  React.useEffect(() => { void load(); }, [load]);
 
   function toggleRow(id: string) {
     setExpandedRows((prev) => {
@@ -652,7 +653,12 @@ function InvestorsTable({
                         </tr>
                         {fundExpanded &&
                           feCalls.map((cc) => {
+                            const isDeployed = cc.deployed_at != null;
                             const isLocked = cc.status !== "pending";
+                            const statusLabel = isDeployed ? "Deployed" : cc.status ?? null;
+                            const statusStyle = isDeployed
+                              ? "bg-emerald-100 text-emerald-800"
+                              : cc.status ? CALL_STATUS_STYLES[cc.status] : "";
                             return (
                               <tr
                                 key={cc.id}
@@ -675,106 +681,121 @@ function InvestorsTable({
                                   —
                                 </td>
                                 <td className="px-4 py-2 text-right tabular-nums text-green-600">
-                                  {cc.status === "paid" ? fmt(cc.amount) : "—"}
+                                  {(cc.status === "paid" || isDeployed) ? fmt(cc.amount) : "—"}
                                 </td>
-                                <td />
+                                {/* Deploy funds / deployed date */}
+                                <td className="px-4 py-2 text-right">
+                                  {cc.status === "paid" && !isDeployed ? (
+                                    <CapitalCallReceive
+                                      capitalCall={cc}
+                                      entityUUID={cc.entity}
+                                      label="Deploy funds"
+                                      onSuccess={() => void load()}
+                                    />
+                                  ) : isDeployed ? (
+                                    <span className="text-muted-foreground">{fmtDate(cc.deployed_at)}</span>
+                                  ) : null}
+                                </td>
                                 <td />
                                 <td />
                                 <td />
                                 <td className="px-4 py-2">
-                                  {cc.status && (
+                                  {statusLabel && (
                                     <span
                                       className={cn(
                                         "inline-flex items-center px-2 py-0.5 rounded font-medium",
-                                        CALL_STATUS_STYLES[cc.status],
+                                        statusStyle,
                                       )}
                                     >
-                                      {cc.status.charAt(0).toUpperCase() +
-                                        cc.status.slice(1)}
+                                      {statusLabel.charAt(0).toUpperCase() + statusLabel.slice(1)}
                                     </span>
                                   )}
                                 </td>
                                 <td className="px-4 py-2 text-right">
-                                  <DropdownMenu>
-                                    <DropdownMenuTrigger asChild>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-6 w-6 p-0 text-muted-foreground"
-                                      >
-                                        <MoreHorizontal className="size-3.5" />
-                                      </Button>
-                                    </DropdownMenuTrigger>
-                                    <DropdownMenuContent align="end" className="w-44">
-                                      {feEntry && (
-                                        <DropdownMenuItem
-                                          onClick={() =>
-                                            setIssueCallTarget({
-                                              shareholderId: sh.id,
-                                              fundShareholderId: ch.id,
-                                              fundEntityId: ch.entity,
-                                              fundEntryId: feEntry.id,
-                                              fundName: feName,
-                                              committedAmount: feEntry.committed_amount ?? null,
-                                              alreadyCalled: feCalled,
-                                              shareClassId: feShareClassId,
-                                            })
-                                          }
+                                  {isDeployed ? (
+                                    <Lock className="size-3 text-muted-foreground/40 ml-auto" />
+                                  ) : (
+                                    <DropdownMenu>
+                                      <DropdownMenuTrigger asChild>
+                                        <Button
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-6 w-6 p-0 text-muted-foreground"
                                         >
-                                          Issue new call
-                                        </DropdownMenuItem>
-                                      )}
-                                      <DropdownMenuSeparator />
-                                      {isLocked ? (
-                                        <DropdownMenuItem disabled className="text-muted-foreground">
-                                          <Pencil className="size-3 mr-2" />
-                                          Locked — payment received
-                                        </DropdownMenuItem>
-                                      ) : (
-                                        <>
+                                          <MoreHorizontal className="size-3.5" />
+                                        </Button>
+                                      </DropdownMenuTrigger>
+                                      <DropdownMenuContent align="end" className="w-44">
+                                        {feEntry && (
                                           <DropdownMenuItem
                                             onClick={() =>
-                                              setFundSheetTarget({ sh, chId: ch.id })
+                                              setIssueCallTarget({
+                                                shareholderId: sh.id,
+                                                fundShareholderId: ch.id,
+                                                fundEntityId: ch.entity,
+                                                fundEntryId: feEntry.id,
+                                                fundName: feName,
+                                                committedAmount: feEntry.committed_amount ?? null,
+                                                alreadyCalled: feCalled,
+                                                shareClassId: feShareClassId,
+                                              })
                                             }
                                           >
+                                            Issue new call
+                                          </DropdownMenuItem>
+                                        )}
+                                        <DropdownMenuSeparator />
+                                        {isLocked ? (
+                                          <DropdownMenuItem disabled className="text-muted-foreground">
                                             <Pencil className="size-3 mr-2" />
-                                            Edit call
+                                            Locked — payment received
                                           </DropdownMenuItem>
-                                          <DropdownMenuItem
-                                            className="text-destructive focus:text-destructive"
-                                            onClick={async () => {
-                                              if (!window.confirm("Delete this capital call?")) return;
-                                              const res = await fetch(`/api/capital-calls/${cc.id}`, { method: "DELETE" });
-                                              if (res.ok) {
-                                                setShareholders((prev) =>
-                                                  prev.map((s) => {
-                                                    if (s.id !== sh.id) return s;
-                                                    return {
-                                                      ...s,
-                                                      _parent_shareholder: (s._parent_shareholder ?? []).map((c) => {
-                                                        if (c.id !== ch.id) return c;
-                                                        return {
-                                                          ...c,
-                                                          _cap_table_entry: (c._cap_table_entry ?? []).map((e) =>
-                                                            e.id === feEntry?.id
-                                                              ? { ...e, _capital_call: (e._capital_call ?? []).filter((call) => call.id !== cc.id) }
-                                                              : e,
-                                                          ),
-                                                        };
-                                                      }),
-                                                    };
-                                                  }),
-                                                );
+                                        ) : (
+                                          <>
+                                            <DropdownMenuItem
+                                              onClick={() =>
+                                                setFundSheetTarget({ sh, chId: ch.id })
                                               }
-                                            }}
-                                          >
-                                            <Trash2 className="size-3 mr-2" />
-                                            Delete
-                                          </DropdownMenuItem>
-                                        </>
-                                      )}
-                                    </DropdownMenuContent>
-                                  </DropdownMenu>
+                                            >
+                                              <Pencil className="size-3 mr-2" />
+                                              Edit call
+                                            </DropdownMenuItem>
+                                            <DropdownMenuItem
+                                              className="text-destructive focus:text-destructive"
+                                              onClick={async () => {
+                                                if (!window.confirm("Delete this capital call?")) return;
+                                                const res = await fetch(`/api/capital-calls/${cc.id}`, { method: "DELETE" });
+                                                if (res.ok) {
+                                                  setShareholders((prev) =>
+                                                    prev.map((s) => {
+                                                      if (s.id !== sh.id) return s;
+                                                      return {
+                                                        ...s,
+                                                        _parent_shareholder: (s._parent_shareholder ?? []).map((c) => {
+                                                          if (c.id !== ch.id) return c;
+                                                          return {
+                                                            ...c,
+                                                            _cap_table_entry: (c._cap_table_entry ?? []).map((e) =>
+                                                              e.id === feEntry?.id
+                                                                ? { ...e, _capital_call: (e._capital_call ?? []).filter((call) => call.id !== cc.id) }
+                                                                : e,
+                                                            ),
+                                                          };
+                                                        }),
+                                                      };
+                                                    }),
+                                                  );
+                                                }
+                                              }}
+                                            >
+                                              <Trash2 className="size-3 mr-2" />
+                                              Delete
+                                            </DropdownMenuItem>
+                                          </>
+                                        )}
+                                      </DropdownMenuContent>
+                                    </DropdownMenu>
+                                  )}
                                 </td>
                               </tr>
                             );
