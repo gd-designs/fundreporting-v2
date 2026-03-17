@@ -11,6 +11,8 @@ import {
   Mail,
   MailCheck,
   BadgeCheck,
+  MoreHorizontal,
+  Lock,
 } from "lucide-react";
 import {
   fetchShareClasses,
@@ -52,6 +54,13 @@ import { Spinner } from "@/components/ui/spinner";
 import { DatePickerInput } from "@/components/date-input";
 import { CapitalCallReceive } from "@/components/capital-call-receive";
 import { ShareholderSheet } from "@/components/shareholder-sheet";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -1002,7 +1011,7 @@ export function CapTableManager({
         fetchCapitalCalls(entityUUID),
         fetch("/api/countries").then((r) => (r.ok ? r.json() : [])),
       ]);
-      // Exclude investor-role shareholders from AM cap table (they appear in Investors tab)
+      // Exclude investor-role shareholders from AM cap table (they appear in the Investors tab)
       const nonInvestorSh = sh.filter((s) => s.role !== "investor");
       const nonInvestorShIds = new Set(nonInvestorSh.map((s) => s.id));
       const nonInvestorEntries = en.filter(
@@ -1242,7 +1251,9 @@ export function CapTableManager({
           <CardContent className="p-0">
             {entries.length === 0 ? (
               <p className="text-sm text-muted-foreground px-6 pb-6">
-                No entries yet. Add shareholders and share issuances above.
+                {isCommitment
+                  ? "No investor commitments yet. Capital calls issued from the Investors tab will appear here."
+                  : "No entries yet. Add shareholders and share issuances above."}
               </p>
             ) : (
               <table className="w-full text-sm">
@@ -1253,7 +1264,7 @@ export function CapTableManager({
                     <th className="text-left py-2 px-4 font-medium">Round</th>
                     <th className="text-right py-2 px-4 font-medium">Committed</th>
                     <th className="text-right py-2 px-4 font-medium">Called</th>
-                    <th className="text-right py-2 px-4 font-medium">Remaining</th>
+                    <th className="text-right py-2 px-4 font-medium">Uncalled</th>
                     <th className="text-right py-2 px-4 font-medium">Shares</th>
                     <th className="text-right py-2 px-4 font-medium">Ownership %</th>
                     <th className="text-right py-2 px-4 font-medium">Current Value</th>
@@ -1437,85 +1448,108 @@ export function CapTableManager({
                         </tr>
                         {expanded &&
                           callsForEntry.length > 0 &&
-                          callsForEntry.map((cc) => (
-                            <tr
-                              key={cc.id}
-                              className="bg-muted/20 border-b text-xs"
-                            >
-                              {(() => {
-                                const sc = shareClasses.find((s) => s.id === cc.share_class);
-                                const sharesForCall = sc?.current_nav && cc.amount ? cc.amount / sc.current_nav : null;
-                                return (
-                                  <>
-                                    <td></td>
-                                    <td
-                                      colSpan={3}
-                                      className="py-1.5 px-4 pl-8 text-muted-foreground text-xs"
-                                    >
-                                      <div>
-                                        {callEntityName(cc) ?? "Capital call"}
-                                        {cc.called_at
-                                          ? ` — ${fmtDate(cc.called_at)}`
-                                          : cc.status === "pending"
-                                            ? " (pending)"
-                                            : ""}
-                                      </div>
-                                      {sc && (
-                                        <div className="opacity-70">
-                                          {sc.name}
-                                          {sc.current_nav != null && ` — ${fmtCurrency(sc.current_nav, currencyCode)} / share`}
-                                        </div>
-                                      )}
-                                    </td>
-                                    <td className="py-1.5 px-4 text-right tabular-nums text-xs">
-                                      {fmtCurrency(cc.amount, currencyCode)}
-                                    </td>
-                                    <td></td>
-                                    <td className="py-1.5 px-4 text-right tabular-nums text-xs">
-                                      {sharesForCall != null ? fmt(sharesForCall, 0) : "—"}
-                                    </td>
-                                    <td className="py-1.5 px-4 text-right text-xs">
-                                      <span
-                                        className={`inline-flex items-center rounded-full px-1.5 py-0.5 font-medium ${cc.status === "paid" && cc.received_at ? "bg-emerald-100 text-emerald-800" : STATUS_BADGE[cc.status ?? "pending"]}`}
-                                      >
-                                        {cc.status === "paid" && cc.received_at ? "Settled" : (cc.status ? cc.status.charAt(0).toUpperCase() + cc.status.slice(1) : "Pending")}
-                                      </span>
-                                    </td>
-                                    <td className="py-1.5 px-4 text-xs">
-                                      <div className="flex items-center gap-1 justify-end">
-                                        {cc.status === "paid" && !cc.received_at && (
-                                          <CapitalCallReceive
-                                            capitalCall={cc}
-                                            entityUUID={entityUUID}
-                                            currencyCode={currencyCode}
-                                            onSuccess={load}
-                                          />
-                                        )}
-                                        <button
-                                          onClick={() =>
-                                            setCcDialog({
-                                              open: true,
-                                              entryId: entry.id,
-                                              existing: cc,
-                                            })
-                                          }
-                                          className="text-muted-foreground hover:text-foreground"
-                                        >
-                                          <Pencil className="size-3" />
-                                        </button>
-                                        <button
-                                          onClick={() => deleteCapitalCall(cc.id)}
-                                          className="text-muted-foreground hover:text-destructive"
-                                        >
-                                          <Trash2 className="size-3" />
-                                        </button>
-                                      </div>
-                                    </td>
-                                  </>
-                                );
-                              })()}
-                            </tr>
-                          ))}
+                          callsForEntry.map((cc) => {
+                            const sc = shareClasses.find((s) => s.id === cc.share_class);
+                            const sharesForCall = sc?.current_nav && cc.amount ? cc.amount / sc.current_nav : null;
+                            const now = Date.now();
+                            const isOverdue = cc.due_date != null && cc.due_date < now && cc.status !== "paid";
+                            const isDeployed = cc.deployed_at != null;
+                            const isLocked = cc.status !== "pending";
+                            const statusLabel = isDeployed
+                              ? "Deployed"
+                              : cc.status === "paid"
+                              ? "Paid"
+                              : cc.status === "partial"
+                              ? "Partial"
+                              : "Pending";
+                            const statusClass = isDeployed
+                              ? "bg-emerald-100 text-emerald-800"
+                              : STATUS_BADGE[cc.status ?? "pending"];
+                            return (
+                              <tr key={cc.id} className="bg-muted/20 border-b text-xs">
+                                <td></td>
+                                {/* Shareholder + Round + Committed columns */}
+                                <td colSpan={3} className="py-2 px-4 pl-8">
+                                  <div className="font-medium text-foreground">
+                                    {cc.called_at ? fmtDate(cc.called_at) : "Pending issue"}
+                                  </div>
+                                  {sc && (
+                                    <div className="text-muted-foreground text-[11px] mt-0.5">
+                                      {sc.name}{sc.current_nav != null && ` · ${fmtCurrency(sc.current_nav, currencyCode)}/share`}
+                                    </div>
+                                  )}
+                                </td>
+                                {/* Amount (Called column) */}
+                                <td className="py-2 px-4 text-right tabular-nums">
+                                  {fmtCurrency(cc.amount, currencyCode)}
+                                </td>
+                                {/* Due date (Uncalled column) */}
+                                <td className={`py-2 px-4 text-right tabular-nums ${isOverdue ? "text-destructive font-medium" : "text-muted-foreground"}`}>
+                                  {cc.due_date ? fmtDate(cc.due_date) : "—"}
+                                </td>
+                                {/* Shares */}
+                                <td className="py-2 px-4 text-right tabular-nums">
+                                  {sharesForCall != null ? fmt(sharesForCall, 0) : "—"}
+                                </td>
+                                {/* Status (Ownership % column) */}
+                                <td className="py-2 px-4 text-right">
+                                  <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 font-medium ${statusClass}`}>
+                                    {statusLabel}
+                                  </span>
+                                </td>
+                                {/* Received date or Receive Funds button (Current Value column) */}
+                                <td className="py-2 px-4 text-right text-muted-foreground">
+                                  {cc.received_at
+                                    ? fmtDate(cc.received_at)
+                                    : cc.status === "paid" && !cc.deployed_at
+                                    ? <CapitalCallReceive capitalCall={cc} entityUUID={entityUUID} currencyCode={currencyCode} label="Deploy funds" onSuccess={load} />
+                                    : "—"}
+                                </td>
+                                {/* Deployed date (G/L column) */}
+                                <td className="py-2 px-4 text-right text-muted-foreground">
+                                  {cc.deployed_at ? fmtDate(cc.deployed_at) : "—"}
+                                </td>
+                                {/* Actions */}
+                                <td className="py-2 px-4">
+                                  <div className="flex items-center justify-end">
+                                    {isLocked && !isDeployed ? (
+                                      <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                          <Button variant="ghost" size="icon" className="size-6">
+                                            <MoreHorizontal className="size-3.5" />
+                                          </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end">
+                                          <DropdownMenuItem onClick={() => setCcDialog({ open: true, entryId: entry.id, existing: cc })}>
+                                            <Pencil className="size-3.5 mr-2" /> Edit
+                                          </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                      </DropdownMenu>
+                                    ) : isDeployed ? (
+                                      <Lock className="size-3 text-muted-foreground/40" />
+                                    ) : (
+                                      <DropdownMenu>
+                                        <DropdownMenuTrigger asChild>
+                                          <Button variant="ghost" size="icon" className="size-6">
+                                            <MoreHorizontal className="size-3.5" />
+                                          </Button>
+                                        </DropdownMenuTrigger>
+                                        <DropdownMenuContent align="end">
+                                          <DropdownMenuItem onClick={() => setCcDialog({ open: true, entryId: entry.id, existing: cc })}>
+                                            <Pencil className="size-3.5 mr-2" /> Edit
+                                          </DropdownMenuItem>
+                                          <DropdownMenuSeparator />
+                                          <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => deleteCapitalCall(cc.id)}>
+                                            <Trash2 className="size-3.5 mr-2" /> Delete
+                                          </DropdownMenuItem>
+                                        </DropdownMenuContent>
+                                      </DropdownMenu>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
                         {expanded && callsForEntry.length === 0 && (
                           <tr className="bg-muted/20 border-b">
                             <td></td>

@@ -31,10 +31,8 @@ import {
 import { DatePickerInput } from "@/components/date-input";
 import { CapitalCallReceive } from "@/components/capital-call-receive";
 import {
-  fetchCapTableEntries,
-  fetchCapitalCalls,
-  fetchShareClasses,
   type CapTableShareholder,
+  type CapTableFundChild,
   type CapTableEntry,
   type CapitalCall,
   type ShareClass,
@@ -442,6 +440,9 @@ export function InvestorSheet({
   funds: Fund[];
   onUpdated?: () => void;
 }) {
+  // Nested fund children already loaded from the cap table shareholders response
+  const fundChildren: CapTableFundChild[] = shareholder?._parent_shareholder ?? [];
+
   const [entries, setEntries] = React.useState<CapTableEntry[]>([]);
   const [capitalCalls, setCapitalCalls] = React.useState<CapitalCall[]>([]);
   const [shareClasses, setShareClasses] = React.useState<ShareClass[]>([]);
@@ -467,24 +468,20 @@ export function InvestorSheet({
     if (!shareholder) return;
     setLoading(true);
     try {
-      const [en, cc, sc] = await Promise.all([
-        fetchCapTableEntries(entityUUID),
-        fetchCapitalCalls(entityUUID),
-        fetchShareClasses(entityUUID),
-      ]);
-      const myEntries = en.filter((e) => e.shareholder === shareholder.id);
-      const myEntryIds = new Set(myEntries.map((e) => e.id));
-      const addonCalls = myEntries.flatMap((e) => e._capital_call ?? []);
-      const entityCallIds = new Set(cc.map((c) => c.id));
-      const mergedCalls = [
-        ...cc.filter(
-          (c) => c.cap_table_entry && myEntryIds.has(c.cap_table_entry),
-        ),
-        ...addonCalls.filter((c) => !entityCallIds.has(c.id)),
-      ];
+      const res = await fetch(`/api/cap-table-shareholders/${shareholder.id}`);
+      if (!res.ok) return;
+      const sh: CapTableShareholder = await res.json();
+
+      const myEntries: CapTableEntry[] = sh._cap_table_entry ?? [];
+      const allCalls: CapitalCall[] = myEntries.flatMap((e) => e._capital_call ?? []);
+      const scMap = new Map<string, ShareClass>();
+      for (const call of allCalls) {
+        if (call._share_class) scMap.set(call._share_class.id, call._share_class as unknown as ShareClass);
+      }
+
       setEntries(myEntries);
-      setCapitalCalls(mergedCalls);
-      setShareClasses(sc);
+      setCapitalCalls(allCalls);
+      setShareClasses(Array.from(scMap.values()));
     } finally {
       setLoading(false);
     }
@@ -546,61 +543,55 @@ export function InvestorSheet({
 
   if (!shareholder) return null;
 
-  const totalCommitted = entries.reduce(
-    (s, e) => s + (e.committed_amount ?? 0),
-    0,
+  // Prefer nested fund data for stats (already loaded in parent)
+  const useNested = fundChildren.length > 0;
+  const allNestedCalls = fundChildren.flatMap((ch) =>
+    (ch._cap_table_entry ?? []).flatMap((e) => e._capital_call ?? []),
   );
-  const totalCalled = capitalCalls.reduce((s, c) => s + (c.amount ?? 0), 0);
-  const uncalled = totalCommitted - totalCalled;
-  const paidIn = capitalCalls
-    .filter((c) => c.status === "paid")
-    .reduce((s, c) => s + (c.amount ?? 0), 0);
+  const totalCommitted = useNested
+    ? fundChildren.reduce(
+        (s, ch) => s + (ch._cap_table_entry?.[0]?.committed_amount ?? 0),
+        0,
+      )
+    : entries.reduce((s, e) => s + (e.committed_amount ?? 0), 0);
+  const totalCalled = useNested
+    ? allNestedCalls.reduce((s, c) => s + (c.amount ?? 0), 0)
+    : capitalCalls.reduce((s, c) => s + (c.amount ?? 0), 0);
+  const uncalled = Math.max(0, totalCommitted - totalCalled);
+  const paidIn = useNested
+    ? allNestedCalls.filter((c) => c.status === "paid").reduce((s, c) => s + (c.amount ?? 0), 0)
+    : capitalCalls.filter((c) => c.status === "paid").reduce((s, c) => s + (c.amount ?? 0), 0);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="overflow-y-auto w-[90vw]! p-0">
         <div className="flex flex-col">
-          <SheetHeader className="shrink-0 px-4 pt-4">
+          <SheetHeader className="shrink-0 px-4 pt-4 pb-3 border-b">
             <SheetTitle>{shareholder.name ?? "Investor"}</SheetTitle>
             <SheetDescription>
               {shareholder.email ?? "No email on file"}
             </SheetDescription>
           </SheetHeader>
 
-          {/* Summary cards */}
-          <div className="grid grid-cols-5 gap-3 px-4 pt-3">
-            <div className="rounded-md border p-3">
-              <p className="text-muted-foreground text-xs">Committed</p>
-              <p className="mt-1 text-sm font-semibold tabular-nums">
-                {fmt(totalCommitted)}
-              </p>
-            </div>
-            <div className="rounded-md border p-3">
-              <p className="text-muted-foreground text-xs">Called</p>
-              <p className="mt-1 text-sm font-semibold tabular-nums">
-                {fmt(totalCalled)}
-              </p>
-            </div>
-            <div className="rounded-md border p-3">
-              <p className="text-muted-foreground text-xs">Uncalled</p>
-              <p
-                className={`mt-1 text-sm font-semibold tabular-nums ${uncalled > 0 ? "text-amber-600" : ""}`}
-              >
-                {fmt(uncalled)}
-              </p>
-            </div>
-            <div className="rounded-md border p-3">
-              <p className="text-muted-foreground text-xs">Paid in</p>
-              <p className="mt-1 text-sm font-semibold tabular-nums text-green-600">
-                {fmt(paidIn)}
-              </p>
-            </div>
-            <div className="rounded-md border p-3">
-              <p className="text-muted-foreground text-xs">Paid out</p>
-              <p className="mt-1 text-sm font-semibold tabular-nums text-muted-foreground/50">
-                —
-              </p>
-            </div>
+          {/* Summary stats */}
+          <div className="grid grid-cols-4 gap-px border-b bg-border">
+            {[
+              { label: "Committed", value: fmt(totalCommitted) },
+              { label: "Called", value: fmt(totalCalled) },
+              {
+                label: "Uncalled",
+                value: uncalled > 0 ? fmt(uncalled) : "—",
+                className: uncalled > 0 ? "text-amber-600" : "",
+              },
+              { label: "Paid in", value: fmt(paidIn), className: "text-green-600" },
+            ].map(({ label, value, className }) => (
+              <div key={label} className="bg-background px-4 py-3">
+                <p className="text-xs text-muted-foreground">{label}</p>
+                <p className={`mt-0.5 text-sm font-semibold tabular-nums ${className ?? ""}`}>
+                  {value}
+                </p>
+              </div>
+            ))}
           </div>
 
           <div className="flex-1 px-4 pb-4">
@@ -619,6 +610,86 @@ export function InvestorSheet({
 
               {/* ── Commitments tab ── */}
               <TabsContent value="commitments" className="mt-4">
+                {/* Fund position cards from nested data */}
+                {useNested && (
+                  <div className="flex flex-col gap-3 mb-4">
+                    {fundChildren.map((ch) => {
+                      const chEntry = ch._cap_table_entry?.[0] ?? null;
+                      const chCalls = chEntry?._capital_call ?? [];
+                      const chCalled = chCalls.reduce((s, c) => s + (c.amount ?? 0), 0);
+                      const chUncalled = Math.max(0, (chEntry?.committed_amount ?? 0) - chCalled);
+                      const chPaid = chCalls.filter((c) => c.status === "paid").reduce((s, c) => s + (c.amount ?? 0), 0);
+                      const fundMatch = funds.find((f) => f.entity === ch.entity);
+                      const fundName = fundMatch?.name ?? ch._entity?._fund?.name ?? "Fund";
+                      const allPaid = chCalls.length > 0 && chCalls.every((c) => c.status === "paid");
+                      const anyPartial = chCalls.some((c) => c.status === "partial");
+                      const anyPending = chCalls.some((c) => c.status === "pending");
+                      const callStatus = allPaid ? "paid" : anyPartial ? "partial" : anyPending ? "pending" : null;
+                      return (
+                        <div key={ch.id} className="rounded-md border overflow-hidden">
+                          <div className="flex items-center justify-between px-3 py-2.5 bg-muted/30 border-b">
+                            <div>
+                              <p className="text-sm font-medium">{fundName}</p>
+                              <p className="text-xs text-muted-foreground">
+                                Committed: {fmt(chEntry?.committed_amount)}
+                                {chCalls.length > 0 && ` · ${chCalls.length} call${chCalls.length !== 1 ? "s" : ""}`}
+                              </p>
+                            </div>
+                            {callStatus && (
+                              <span
+                                className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                                  callStatus === "paid"
+                                    ? "bg-green-100 text-green-700"
+                                    : callStatus === "partial"
+                                      ? "bg-amber-100 text-amber-700"
+                                      : "bg-slate-100 text-slate-700"
+                                }`}
+                              >
+                                {callStatus.charAt(0).toUpperCase() + callStatus.slice(1)}
+                              </span>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-3 divide-x text-xs">
+                            <div className="px-3 py-2">
+                              <p className="text-muted-foreground">Called</p>
+                              <p className="font-medium tabular-nums mt-0.5">{fmt(chCalled)}</p>
+                            </div>
+                            <div className="px-3 py-2">
+                              <p className="text-muted-foreground">Uncalled</p>
+                              <p className={`font-medium tabular-nums mt-0.5 ${chUncalled > 0 ? "text-amber-600" : ""}`}>
+                                {chUncalled > 0 ? fmt(chUncalled) : "—"}
+                              </p>
+                            </div>
+                            <div className="px-3 py-2">
+                              <p className="text-muted-foreground">Paid in</p>
+                              <p className="font-medium tabular-nums mt-0.5 text-green-600">{fmt(chPaid)}</p>
+                            </div>
+                          </div>
+                          {chCalls.length > 0 && (
+                            <div className="border-t divide-y">
+                              {chCalls.map((cc) => (
+                                <div key={cc.id} className="flex items-center justify-between px-3 py-1.5 text-xs">
+                                  <span className="text-muted-foreground">
+                                    {cc.called_at ? fmtDate(cc.called_at) : "—"}
+                                  </span>
+                                  <span className="tabular-nums font-medium">{fmt(cc.amount)}</span>
+                                  {cc.status && (
+                                    <span
+                                      className={`inline-flex items-center px-1.5 py-0.5 rounded font-medium ${CALL_STATUS_STYLES[cc.status]}`}
+                                    >
+                                      {CALL_STATUS_LABEL[cc.status]}
+                                    </span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {!useNested && (<>
                 <div className="flex items-center justify-between mb-3">
                   <p className="text-sm font-medium">Fund commitments</p>
                   <Button
@@ -851,6 +922,7 @@ export function InvestorSheet({
                     })}
                   </div>
                 )}
+                </>)}
               </TabsContent>
 
               {/* ── Profile tab ── */}

@@ -32,6 +32,13 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 // ── Country / phone data ──────────────────────────────────────────────────────
@@ -361,7 +368,8 @@ function AddressSearch({
 
 const TOTAL_STEPS = 5;
 
-type Fund = { id: string; name?: string | null };
+type Fund = { id: string; name?: string | null; entity?: string | null };
+type ShareClass = { id: string; name?: string | null };
 type IrMember = {
   id: string;
   user: number;
@@ -402,8 +410,10 @@ export function AddInvestorDialog({
   // Step 2: entities
   const [selectedFunds, setSelectedFunds] = React.useState<string[]>([]);
 
-  // Step 3: amounts
+  // Step 3: amounts + share classes
   const [amounts, setAmounts] = React.useState<Record<string, string>>({});
+  const [shareClasses, setShareClasses] = React.useState<Record<string, string>>({});
+  const [shareClassCache, setShareClassCache] = React.useState<Record<string, ShareClass[]>>({});
 
   // Step 4: referrer
   const [referrer, setReferrer] = React.useState("");
@@ -420,6 +430,21 @@ export function AddInvestorDialog({
   const [error, setError] = React.useState<string | null>(null);
   const [savedLeadId, setSavedLeadId] = React.useState<string | null>(null);
   const [uploadStatuses, setUploadStatuses] = React.useState<Record<string, "uploading" | "done" | "error">>({});
+
+  React.useEffect(() => {
+    if (!open || step !== 3) return;
+    for (const id of selectedFunds) {
+      const fund = funds.find((f) => f.id === id);
+      if (!fund?.entity || shareClassCache[fund.entity] !== undefined) continue;
+      fetch(`/api/share-classes?entity=${fund.entity}`)
+        .then((r) => (r.ok ? r.json() : []))
+        .then((data: ShareClass[]) =>
+          setShareClassCache((prev) => ({ ...prev, [fund.entity!]: data })),
+        )
+        .catch(() => {});
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, step]);
 
   React.useEffect(() => {
     if (!open || step !== 5) return;
@@ -451,6 +476,8 @@ export function AddInvestorDialog({
     setZip("");
     setSelectedFunds([]);
     setAmounts({});
+    setShareClasses({});
+    setShareClassCache({});
     setReferrer("");
     setIrSearch("");
     setIrMembers([]);
@@ -506,7 +533,13 @@ export function AddInvestorDialog({
         status: "lead",
       };
       if (hasAddress) body.address = addressObj;
-      if (selectedFunds.length > 0) body.interests = selectedFunds;
+      if (selectedFunds.length > 0) {
+        body.interests = selectedFunds.map((id) => ({
+          fund: id,
+          ...(shareClasses[id] ? { share_class: shareClasses[id] } : {}),
+          ...(amounts[id] ? { committed_amount: parseFloat(amounts[id]) } : {}),
+        }));
+      }
       if (selectedIr.length > 0) body.assigned_to = selectedIr.map((m) => m.id);
 
       const res = await fetch("/api/investor-leads", {
@@ -777,15 +810,44 @@ export function AddInvestorDialog({
                           Investment Entity
                         </th>
                         <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wider border-l w-44">
-                          Input Amount
+                          Share Class
+                        </th>
+                        <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground uppercase tracking-wider border-l w-44">
+                          Amount
                         </th>
                       </tr>
                     </thead>
                     <tbody>
-                      {selectedFunds.map((id) => (
+                      {selectedFunds.map((id) => {
+                        const fund = funds.find((f) => f.id === id);
+                        const scOptions = fund?.entity ? (shareClassCache[fund.entity] ?? []) : [];
+                        return (
                         <tr key={id} className="border-b last:border-0">
                           <td className="px-4 py-2.5">
-                            {funds.find((f) => f.id === id)?.name ?? id}
+                            {fund?.name ?? id}
+                          </td>
+                          <td className="px-2 py-2 border-l">
+                            <Select
+                              value={shareClasses[id] ?? ""}
+                              onValueChange={(v) =>
+                                setShareClasses((prev) => ({ ...prev, [id]: v }))
+                              }
+                            >
+                              <SelectTrigger className="h-8 text-sm">
+                                <SelectValue placeholder="None" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {scOptions.length === 0 ? (
+                                  <SelectItem value="_none" disabled>No share classes</SelectItem>
+                                ) : (
+                                  scOptions.map((sc) => (
+                                    <SelectItem key={sc.id} value={sc.id}>
+                                      {sc.name ?? sc.id}
+                                    </SelectItem>
+                                  ))
+                                )}
+                              </SelectContent>
+                            </Select>
                           </td>
                           <td className="px-4 py-2 border-l">
                             <Input
@@ -803,7 +865,8 @@ export function AddInvestorDialog({
                             />
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

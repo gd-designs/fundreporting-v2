@@ -95,75 +95,28 @@ export function ConvertToInvestorDialog({
     setError(null);
 
     try {
-      // Create ONE shareholder linked to the asset manager entity
-      const shrRes = await fetch("/api/cap-table-shareholders", {
+      const res = await fetch(`/api/investor-leads/${lead.id}/convert`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          entity: assetManagerEntityId,
           name: name.trim() || undefined,
           email: email.trim() || undefined,
           type,
-          role: "investor",
+          assetManagerEntityId,
+          interests: interestRows.map((r) => ({
+            fundEntity: r.fundEntity,
+            shareClass: r.shareClass ?? undefined,
+            committedAmount: r.committedAmount ?? undefined,
+          })),
         }),
       });
-      if (!shrRes.ok) {
-        const err = (await shrRes.json().catch(() => ({}))) as { error?: string };
-        throw new Error(err.error ?? "Failed to create shareholder.");
+
+      const data = (await res.json()) as { error?: string; lead?: LeadRecord };
+      if (!res.ok && res.status !== 207) {
+        throw new Error(data.error ?? "Failed to convert investor.");
       }
-      const shareholder = (await shrRes.json()) as { id: string };
 
-      // Create ONE entry at AM level with total committed amount
-      const totalCommitted = interestRows.reduce(
-        (sum, r) => sum + (r.committedAmount ?? 0),
-        0,
-      );
-      const entryRes = await fetch("/api/cap-table-entries", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          entity: assetManagerEntityId,
-          shareholder: shareholder.id,
-          committed_amount: totalCommitted > 0 ? totalCommitted : undefined,
-          issued_at: Date.now(),
-        }),
-      });
-      if (!entryRes.ok) throw new Error("Failed to create cap table entry.");
-      const entry = (await entryRes.json()) as { id: string };
-
-      // Create a pending capital call per fund interest, each scoped to the fund entity
-      // These record how the total commitment is split across funds
-      await Promise.allSettled(
-        interestRows.map((row) =>
-          fetch("/api/capital-calls", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              entity: row.fundEntity,
-              cap_table_entry: entry.id,
-              amount: row.committedAmount ?? undefined,
-              status: "pending",
-            }),
-          }),
-        ),
-      );
-
-      // PATCH the lead to investor status
-      const leadPatch: Record<string, unknown> = {
-        status: "investor",
-        converted_at: Date.now(),
-        converted_to_shareholder: shareholder.id,
-      };
-
-      const leadRes = await fetch(`/api/investor-leads/${lead.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(leadPatch),
-      });
-      if (!leadRes.ok) throw new Error("Failed to update lead status.");
-
-      const updatedLead = (await leadRes.json()) as LeadRecord;
-      onConverted({ ...lead, ...updatedLead });
+      onConverted({ ...lead, ...(data.lead ?? {}), status: "investor" });
       onOpenChange(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
@@ -180,8 +133,9 @@ export function ConvertToInvestorDialog({
         <DialogHeader>
           <DialogTitle>Convert to investor</DialogTitle>
           <DialogDescription>
-            Creates a shareholder record, a total commitment entry, and pending
-            capital calls for each fund allocation.
+            Creates a shareholder record at the asset manager and fund level,
+            and a commitment entry for each fund allocation. Capital calls can
+            be issued separately from the Committed Investors tab.
           </DialogDescription>
         </DialogHeader>
 

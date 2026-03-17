@@ -15,6 +15,21 @@ export type ShareClass = {
   created_at: number
 }
 
+export type CapTableShEntry = {
+  id: string
+  committed_amount?: number | null
+  _capital_call?: CapitalCall[]
+}
+
+export type CapTableFundChild = {
+  id: string
+  entity: string
+  name?: string | null
+  email?: string | null
+  _entity?: { id: string; _fund?: { name?: string | null } | null } | null
+  _cap_table_entry?: CapTableShEntry[] | null
+}
+
 export type CapTableShareholder = {
   id: string
   entity: string
@@ -33,7 +48,10 @@ export type CapTableShareholder = {
   accepted_at: number | null
   rejected: boolean | null
   notes: string | null
+  parent_shareholder?: string | null
   created_at: number
+  _cap_table_entry?: CapTableShEntry[] | null
+  _parent_shareholder?: CapTableFundChild[] | null
 }
 
 export type CapTableEntry = {
@@ -49,7 +67,7 @@ export type CapTableEntry = {
   notes: string | null
   created_at: number
   _capital_call?: CapitalCall[] | null
-  _shareholder?: { id: string; name?: string | null; email?: string | null; type?: string | null } | null
+  _shareholder?: { id: string; name?: string | null; email?: string | null; type?: string | null; parent_shareholder?: string | null } | null
 }
 
 export type CapitalCallEntityAddon = {

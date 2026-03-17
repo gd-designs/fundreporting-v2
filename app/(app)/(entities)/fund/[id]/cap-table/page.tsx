@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation"
-import { getAuthToken, getCurrentUser } from "@/lib/auth"
-import { CapTableManager } from "@/components/cap-table-manager"
+import { getAuthToken } from "@/lib/auth"
+import { FundCapTableView } from "@/components/fund-cap-table-view"
 
 async function getRecord(id: string) {
   const token = await getAuthToken()
@@ -10,13 +10,18 @@ async function getRecord(id: string) {
     cache: "no-store",
   })
   if (!res.ok) return null
-  return res.json() as Promise<{ id: string; entity: string; name?: string | null; country?: string | null; _currency?: { id: number; code: string } | null; _entity?: { owner?: number | null } | null }>
+  return res.json() as Promise<{ id: string; entity: string; name?: string | null; _currency?: { id: number; code: string } | null }>
 }
 
 export default async function CapTablePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const [record, currentUser] = await Promise.all([getRecord(id), getCurrentUser()])
+  const record = await getRecord(id)
   if (!record) notFound()
-  const countryId = record.country ? Number(record.country) : null
-  return <CapTableManager entityUUID={record.entity} entityName={record.name ?? undefined} defaultCountryId={isNaN(countryId ?? NaN) ? null : countryId} currencyCode={record._currency?.code} currentUserId={currentUser?.id} entityOwner={record._entity?.owner ?? null} />
+  return (
+    <FundCapTableView
+      entityUUID={record.entity}
+      fundName={record.name ?? undefined}
+      currencyCode={record._currency?.code}
+    />
+  )
 }
