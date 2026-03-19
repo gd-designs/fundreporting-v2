@@ -1,5 +1,21 @@
 "use client"
 
+export type ShareClassFee = {
+  id: string
+  share_class?: string | null
+  entity?: string | null
+  type?: "management" | "performance" | "entry" | "exit" | "administration" | "setup" | "other" | null
+  rate?: number | null
+  basis?: "nav" | "committed_capital" | "call_amount" | "profit" | "fixed" | null
+  frequency?: "one_time" | "monthly" | "quarterly" | "semi_annual" | "annual" | null
+  hurdle_rate?: number | null
+  high_water_mark?: boolean | null
+  catch_up_rate?: number | null
+  fixed_amount?: number | null
+  notes?: string | null
+  created_at?: number | null
+}
+
 export type ShareClass = {
   id: string
   entity: string
@@ -13,6 +29,7 @@ export type ShareClass = {
   preferred_return?: number | null
   notes: string | null
   created_at: number
+  _share_class_fee?: ShareClassFee[] | null
 }
 
 export type CapTableShEntry = {

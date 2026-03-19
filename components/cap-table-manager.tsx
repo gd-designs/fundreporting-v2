@@ -20,10 +20,12 @@ import {
   fetchCapTableEntries,
   fetchCapitalCalls,
   type ShareClass,
+  type ShareClassFee,
   type CapTableShareholder,
   type CapTableEntry,
   type CapitalCall,
 } from "@/lib/cap-table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -520,6 +522,189 @@ function EntryDialog({
 
 // ─── Add Share Class Dialog ───────────────────────────────────────────────────
 
+// ─── Fee constants ────────────────────────────────────────────────────────────
+
+const FEE_TYPE_LABELS: Record<string, string> = {
+  management: "Management",
+  performance: "Performance",
+  entry: "Entry",
+  exit: "Exit",
+  administration: "Administration",
+  setup: "Setup",
+  other: "Other",
+};
+
+const FEE_BASIS_LABELS: Record<string, string> = {
+  nav: "NAV",
+  committed_capital: "Committed Capital",
+  call_amount: "Call Amount",
+  profit: "Profit",
+  fixed: "Fixed Amount",
+};
+
+const FEE_FREQ_LABELS: Record<string, string> = {
+  one_time: "One Time",
+  monthly: "Monthly",
+  quarterly: "Quarterly",
+  semi_annual: "Semi-Annual",
+  annual: "Annual",
+};
+
+function feeDescription(fee: ShareClassFee): string {
+  const parts: string[] = [];
+  if (fee.basis === "fixed" && fee.fixed_amount != null) {
+    parts.push(`${fee.fixed_amount} fixed`);
+  } else if (fee.rate != null) {
+    parts.push(`${fee.rate}%`);
+  }
+  if (fee.basis && fee.basis !== "fixed") parts.push(`of ${FEE_BASIS_LABELS[fee.basis] ?? fee.basis}`);
+  if (fee.frequency) parts.push(`· ${FEE_FREQ_LABELS[fee.frequency] ?? fee.frequency}`);
+  return parts.join(" ") || "—";
+}
+
+// ─── Fee Form (inline) ────────────────────────────────────────────────────────
+
+function FeeForm({
+  shareClassId,
+  entityUUID,
+  existing,
+  onSaved,
+  onCancel,
+}: {
+  shareClassId: string;
+  entityUUID: string;
+  existing: ShareClassFee | null;
+  onSaved: () => void;
+  onCancel: () => void;
+}) {
+  const [type, setType] = React.useState<string>(existing?.type ?? "management");
+  const [rate, setRate] = React.useState(existing?.rate != null ? String(existing.rate) : "");
+  const [basis, setBasis] = React.useState<string>(existing?.basis ?? "nav");
+  const [frequency, setFrequency] = React.useState<string>(existing?.frequency ?? "annual");
+  const [hurdleRate, setHurdleRate] = React.useState(existing?.hurdle_rate != null ? String(existing.hurdle_rate) : "");
+  const [hwm, setHwm] = React.useState(existing?.high_water_mark ?? false);
+  const [catchUpRate, setCatchUpRate] = React.useState(existing?.catch_up_rate != null ? String(existing.catch_up_rate) : "");
+  const [fixedAmount, setFixedAmount] = React.useState(existing?.fixed_amount != null ? String(existing.fixed_amount) : "");
+  const [notes, setNotes] = React.useState(existing?.notes ?? "");
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    try {
+      const body = {
+        share_class: shareClassId,
+        entity: entityUUID,
+        type: type || null,
+        rate: basis !== "fixed" && rate ? Number(rate) : null,
+        basis: basis || null,
+        frequency: frequency || null,
+        hurdle_rate: hurdleRate ? Number(hurdleRate) : null,
+        high_water_mark: type === "performance" ? hwm : null,
+        catch_up_rate: catchUpRate ? Number(catchUpRate) : null,
+        fixed_amount: basis === "fixed" && fixedAmount ? Number(fixedAmount) : null,
+        notes: notes || null,
+      };
+      const url = existing ? `/api/share-class-fees/${existing.id}` : `/api/share-class-fees`;
+      const res = await fetch(url, {
+        method: existing ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) { setError("Failed to save fee."); return; }
+      onSaved();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="rounded-lg border bg-muted/30 p-3 flex flex-col gap-3">
+      <div className="grid grid-cols-2 gap-2">
+        <Field>
+          <FieldLabel className="text-xs">Type</FieldLabel>
+          <Select value={type} onValueChange={setType}>
+            <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {Object.entries(FEE_TYPE_LABELS).map(([v, l]) => (
+                <SelectItem key={v} value={v}>{l}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field>
+          <FieldLabel className="text-xs">Frequency</FieldLabel>
+          <Select value={frequency} onValueChange={setFrequency}>
+            <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {Object.entries(FEE_FREQ_LABELS).map(([v, l]) => (
+                <SelectItem key={v} value={v}>{l}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <Field>
+          <FieldLabel className="text-xs">Basis</FieldLabel>
+          <Select value={basis} onValueChange={setBasis}>
+            <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {Object.entries(FEE_BASIS_LABELS).map(([v, l]) => (
+                <SelectItem key={v} value={v}>{l}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        {basis === "fixed" ? (
+          <Field>
+            <FieldLabel className="text-xs">Fixed Amount</FieldLabel>
+            <Input className="h-8 text-xs" type="number" min="0" step="0.01" placeholder="0.00" value={fixedAmount} onChange={(e) => setFixedAmount(e.target.value)} />
+          </Field>
+        ) : (
+          <Field>
+            <FieldLabel className="text-xs">Rate (%)</FieldLabel>
+            <Input className="h-8 text-xs" type="number" min="0" step="0.01" placeholder="e.g. 2.00" value={rate} onChange={(e) => setRate(e.target.value)} />
+          </Field>
+        )}
+      </div>
+      {type === "performance" && (
+        <div className="grid grid-cols-2 gap-2">
+          <Field>
+            <FieldLabel className="text-xs">Hurdle Rate (%)</FieldLabel>
+            <Input className="h-8 text-xs" type="number" min="0" step="0.01" placeholder="e.g. 8.00" value={hurdleRate} onChange={(e) => setHurdleRate(e.target.value)} />
+          </Field>
+          <Field>
+            <FieldLabel className="text-xs">Catch-up Rate (%)</FieldLabel>
+            <Input className="h-8 text-xs" type="number" min="0" step="0.01" placeholder="e.g. 100" value={catchUpRate} onChange={(e) => setCatchUpRate(e.target.value)} />
+          </Field>
+          <Field className="col-span-2">
+            <FieldLabel htmlFor="fee-hwm" className="text-xs flex items-center gap-2">
+              <input id="fee-hwm" type="checkbox" checked={hwm} onChange={(e) => setHwm(e.target.checked)} className="size-3.5 rounded border" />
+              High Water Mark
+            </FieldLabel>
+          </Field>
+        </div>
+      )}
+      <Field>
+        <FieldLabel className="text-xs">Notes</FieldLabel>
+        <Input className="h-8 text-xs" placeholder="Optional notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
+      </Field>
+      {error && <FieldError>{error}</FieldError>}
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>
+        <Button type="submit" size="sm" disabled={saving}>
+          {saving ? <Spinner className="size-3.5" /> : existing ? "Save" : "Add fee"}
+        </Button>
+      </div>
+    </form>
+  );
+}
+
+// ─── Share Class Dialog ────────────────────────────────────────────────────────
+
 function ShareClassDialog({
   open,
   onClose,
@@ -539,14 +724,41 @@ function ShareClassDialog({
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
+  // After a new share class is created, holds it so we can immediately add fees
+  const [created, setCreated] = React.useState<ShareClass | null>(null);
+
+  // Fees state (shown after creation or when editing)
+  const [fees, setFees] = React.useState<ShareClassFee[]>([]);
+  const [addingFee, setAddingFee] = React.useState(false);
+  const [editingFee, setEditingFee] = React.useState<ShareClassFee | null>(null);
+
+  // The "active" share class: either the one being edited, or the one just created
+  const activeClass = existing ?? created;
+
   React.useEffect(() => {
     if (open) {
       setError(null);
+      setCreated(null);
       setName(existing?.name ?? "");
       setVoting(existing?.voting_rights ?? true);
       setCurrentNav(existing?.current_nav != null ? String(existing.current_nav) : "");
+      setAddingFee(false);
+      setEditingFee(null);
+      if (existing) void loadFees(existing.id);
+      else setFees([]);
     }
   }, [open, existing]);
+
+  async function loadFees(shareClassId: string) {
+    const res = await fetch(`/api/share-class-fees?share_class=${shareClassId}`, { cache: "no-store" });
+    if (res.ok) setFees(await res.json());
+  }
+
+  async function deleteFee(id: string) {
+    if (!confirm("Delete this fee?")) return;
+    await fetch(`/api/share-class-fees/${id}`, { method: "DELETE" });
+    if (activeClass) void loadFees(activeClass.id);
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -559,97 +771,169 @@ function ShareClassDialog({
         voting_rights: voting,
         current_nav: currentNav ? Number(currentNav) : null,
       };
-      const url = existing
-        ? `/api/share-classes/${existing.id}`
-        : `/api/share-classes`;
+      const url = existing ? `/api/share-classes/${existing.id}` : `/api/share-classes`;
       const res = await fetch(url, {
         method: existing ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (!res.ok) {
-        setError("Failed to save share class.");
-        return;
-      }
+      if (!res.ok) { setError("Failed to save share class."); return; }
       onSaved();
-      onClose();
+      if (existing) {
+        // Editing — close as before
+        onClose();
+      } else {
+        // Creating — stay open, switch to fees tab
+        const data = await res.json() as ShareClass;
+        setCreated(data);
+        setAddingFee(true);
+      }
     } finally {
       setSaving(false);
     }
   }
 
+  // Simple form when creating a brand new share class (before it's been saved)
+  if (!existing && !created) {
+    return (
+      <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+        <DialogContent className="sm:max-w-sm">
+          <form onSubmit={handleSubmit}>
+            <DialogHeader>
+              <DialogTitle>New Share Class</DialogTitle>
+              <DialogDescription>Define a class of shares for this entity.</DialogDescription>
+            </DialogHeader>
+            <FieldGroup className="mt-4">
+              <Field>
+                <FieldLabel htmlFor="sc-name">Name</FieldLabel>
+                <Input id="sc-name" placeholder="e.g. Ordinary, Preference A" value={name} onChange={(e) => setName(e.target.value)} required />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="sc-nav">Current NAV / Price per Share</FieldLabel>
+                <Input id="sc-nav" type="number" min="0" step="0.0001" placeholder="e.g. 10.00" value={currentNav} onChange={(e) => setCurrentNav(e.target.value)} />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="sc-voting" className="flex items-center gap-2">
+                  <input id="sc-voting" type="checkbox" checked={voting} onChange={(e) => setVoting(e.target.checked)} className="size-4 rounded border" />
+                  Voting rights
+                </FieldLabel>
+              </Field>
+              {error && <FieldError>{error}</FieldError>}
+            </FieldGroup>
+            <DialogFooter className="mt-4">
+              <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+              <Button type="submit" disabled={saving}>{saving ? <Spinner className="size-4" /> : "Create & add fees"}</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
+  // Tabbed dialog: editing existing, or just created and ready to add fees
+  const isJustCreated = !existing && !!created;
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(v) => {
-        if (!v) onClose();
-      }}
-    >
-      <DialogContent className="sm:max-w-sm">
-        <form onSubmit={handleSubmit}>
-          <DialogHeader>
-            <DialogTitle>
-              {existing ? "Edit Share Class" : "New Share Class"}
-            </DialogTitle>
-            <DialogDescription>
-              Define a class of shares for this entity.
-            </DialogDescription>
-          </DialogHeader>
-          <FieldGroup className="mt-4">
-            <Field>
-              <FieldLabel htmlFor="sc-name">Name</FieldLabel>
-              <Input
-                id="sc-name"
-                placeholder="e.g. Ordinary, Preference A"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                required
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="sc-nav">Current NAV / Price per Share</FieldLabel>
-              <Input
-                id="sc-nav"
-                type="number"
-                min="0"
-                step="0.0001"
-                placeholder="e.g. 10.00"
-                value={currentNav}
-                onChange={(e) => setCurrentNav(e.target.value)}
-              />
-            </Field>
-            <Field>
-              <FieldLabel
-                htmlFor="sc-voting"
-                className="flex items-center gap-2"
-              >
-                <input
-                  id="sc-voting"
-                  type="checkbox"
-                  checked={voting}
-                  onChange={(e) => setVoting(e.target.checked)}
-                  className="size-4 rounded border"
-                />
-                Voting rights
-              </FieldLabel>
-            </Field>
-            {error && <FieldError>{error}</FieldError>}
-          </FieldGroup>
-          <DialogFooter className="mt-4">
-            <Button type="button" variant="outline" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={saving}>
-              {saving ? (
-                <Spinner className="size-4" />
-              ) : existing ? (
-                "Save"
-              ) : (
-                "Create"
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>{isJustCreated ? "Share Class Created" : "Edit Share Class"}</DialogTitle>
+          <DialogDescription>
+            {isJustCreated ? `"${activeClass?.name}" created. Add fee rules below.` : (activeClass?.name ?? "Unnamed")}
+          </DialogDescription>
+        </DialogHeader>
+        <Tabs defaultValue={isJustCreated ? "fees" : "details"}>
+          <TabsList className="w-full">
+            <TabsTrigger value="details" className="flex-1">Details</TabsTrigger>
+            <TabsTrigger value="fees" className="flex-1">Fees {fees.length > 0 && `(${fees.length})`}</TabsTrigger>
+          </TabsList>
+
+          {/* Details tab */}
+          <TabsContent value="details">
+            <form onSubmit={handleSubmit}>
+              <FieldGroup className="mt-4">
+                <Field>
+                  <FieldLabel htmlFor="sc-name">Name</FieldLabel>
+                  <Input id="sc-name" placeholder="e.g. Ordinary, Preference A" value={name} onChange={(e) => setName(e.target.value)} required />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="sc-nav">Current NAV / Price per Share</FieldLabel>
+                  <Input id="sc-nav" type="number" min="0" step="0.0001" placeholder="e.g. 10.00" value={currentNav} onChange={(e) => setCurrentNav(e.target.value)} />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="sc-voting" className="flex items-center gap-2">
+                    <input id="sc-voting" type="checkbox" checked={voting} onChange={(e) => setVoting(e.target.checked)} className="size-4 rounded border" />
+                    Voting rights
+                  </FieldLabel>
+                </Field>
+                {error && <FieldError>{error}</FieldError>}
+              </FieldGroup>
+              <DialogFooter className="mt-4">
+                <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+                <Button type="submit" disabled={saving}>{saving ? <Spinner className="size-4" /> : "Save"}</Button>
+              </DialogFooter>
+            </form>
+          </TabsContent>
+
+          {/* Fees tab */}
+          <TabsContent value="fees">
+            <div className="mt-4 flex flex-col gap-3">
+              {fees.length === 0 && !addingFee && (
+                <p className="text-sm text-muted-foreground">No fees defined yet.</p>
               )}
-            </Button>
-          </DialogFooter>
-        </form>
+              {fees.map((fee) => (
+                editingFee?.id === fee.id ? (
+                  <FeeForm
+                    key={fee.id}
+                    shareClassId={activeClass!.id}
+                    entityUUID={entityUUID}
+                    existing={fee}
+                    onSaved={() => { setEditingFee(null); void loadFees(activeClass!.id); }}
+                    onCancel={() => setEditingFee(null)}
+                  />
+                ) : (
+                  <div key={fee.id} className="flex items-start justify-between rounded-md border px-3 py-2 text-sm">
+                    <div className="flex flex-col gap-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">{FEE_TYPE_LABELS[fee.type ?? ""] ?? fee.type ?? "—"}</span>
+                        <span className="text-xs text-muted-foreground">{feeDescription(fee)}</span>
+                      </div>
+                      {fee.type === "performance" && (
+                        <span className="text-xs text-muted-foreground">
+                          {fee.hurdle_rate != null && `Hurdle ${fee.hurdle_rate}%`}
+                          {fee.high_water_mark && " · HWM"}
+                          {fee.catch_up_rate != null && ` · Catch-up ${fee.catch_up_rate}%`}
+                        </span>
+                      )}
+                      {fee.notes && <span className="text-xs text-muted-foreground">{fee.notes}</span>}
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0 ml-2">
+                      <button onClick={() => { setAddingFee(false); setEditingFee(fee); }} className="text-muted-foreground hover:text-foreground p-1">
+                        <Pencil className="size-3" />
+                      </button>
+                      <button onClick={() => deleteFee(fee.id)} className="text-muted-foreground hover:text-destructive p-1">
+                        <Trash2 className="size-3" />
+                      </button>
+                    </div>
+                  </div>
+                )
+              ))}
+              {addingFee && (
+                <FeeForm
+                  shareClassId={activeClass!.id}
+                  entityUUID={entityUUID}
+                  existing={null}
+                  onSaved={() => { setAddingFee(false); void loadFees(activeClass!.id); }}
+                  onCancel={() => setAddingFee(false)}
+                />
+              )}
+              {!addingFee && !editingFee && (
+                <Button type="button" variant="outline" size="sm" className="self-start" onClick={() => setAddingFee(true)}>
+                  <Plus className="size-3.5 mr-1" /> Add fee
+                </Button>
+              )}
+            </div>
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );

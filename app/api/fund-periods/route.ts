@@ -8,7 +8,7 @@ export async function GET(req: NextRequest) {
   const entity = req.nextUrl.searchParams.get("entity")
   const params = entity ? `?entity=${entity}` : ""
 
-  const res = await fetch(`${process.env.PLATFORM_API_URL}/share_class${params}`, {
+  const res = await fetch(`${process.env.PLATFORM_API_URL}/fund_period${params}`, {
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
   })
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
   const body = await req.json()
-  const res = await fetch(`${process.env.PLATFORM_API_URL}/share_class`, {
+  const res = await fetch(`${process.env.PLATFORM_API_URL}/fund_period`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),

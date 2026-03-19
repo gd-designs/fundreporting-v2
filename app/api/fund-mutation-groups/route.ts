@@ -4,11 +4,9 @@ import { type NextRequest, NextResponse } from "next/server"
 export async function GET(req: NextRequest) {
   const token = await getAuthToken()
   if (!token) return NextResponse.json([], { status: 401 })
-
   const entity = req.nextUrl.searchParams.get("entity")
   const params = entity ? `?entity=${entity}` : ""
-
-  const res = await fetch(`${process.env.PLATFORM_API_URL}/share_class${params}`, {
+  const res = await fetch(`${process.env.PLATFORM_API_URL}/fund_mutation_group${params}`, {
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
   })
@@ -19,9 +17,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const token = await getAuthToken()
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-
   const body = await req.json()
-  const res = await fetch(`${process.env.PLATFORM_API_URL}/share_class`, {
+  const res = await fetch(`${process.env.PLATFORM_API_URL}/fund_mutation_group`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),

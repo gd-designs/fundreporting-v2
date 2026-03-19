@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { ChevronDown, ChevronRight, MoreHorizontal, Lock, Pencil, Trash2 } from "lucide-react"
+import { ChevronDown, ChevronRight, MoreHorizontal, Lock, Pencil, Trash2, UserPlus } from "lucide-react"
 import {
   fetchCapitalCalls,
   fetchCapTableEntries,
@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Spinner } from "@/components/ui/spinner"
 import { CapitalCallReceive } from "@/components/capital-call-receive"
+import { AddFundInvestorDialog } from "@/components/add-fund-investor-dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -224,11 +225,15 @@ function buildInvestorGroups(calls: CapitalCall[], entries: CapTableEntry[]): In
 }
 
 export function FundCapTableView({
+  fundId,
   entityUUID,
+  amEntityUUID,
   fundName,
   currencyCode = "EUR",
 }: {
+  fundId?: string
   entityUUID: string
+  amEntityUUID?: string | null
   fundName?: string
   currencyCode?: string
 }) {
@@ -238,6 +243,7 @@ export function FundCapTableView({
   const [loading, setLoading] = React.useState(true)
   const [expandedRows, setExpandedRows] = React.useState<Set<string>>(new Set())
   const [editDialog, setEditDialog] = React.useState<{ open: boolean; call: CapitalCall | null }>({ open: false, call: null })
+  const [addInvestorOpen, setAddInvestorOpen] = React.useState(false)
 
   async function load() {
     setLoading(true)
@@ -331,14 +337,22 @@ export function FundCapTableView({
 
         {/* Cap Table */}
         <Card>
-          <CardHeader className="pb-3">
+          <CardHeader className="flex flex-row items-center justify-between pb-3">
             <CardTitle className="text-base">Cap Table</CardTitle>
+            <Button size="sm" variant="outline" onClick={() => setAddInvestorOpen(true)}>
+              <UserPlus className="size-3.5 mr-1.5" />
+              Add investor
+            </Button>
           </CardHeader>
           <CardContent className="p-0">
             {investors.length === 0 ? (
-              <p className="text-sm text-muted-foreground px-6 pb-6">
-                No capital calls issued yet. Issue calls from the Investors tab in the Asset Manager.
-              </p>
+              <div className="px-6 pb-6 flex flex-col gap-3">
+                <p className="text-sm text-muted-foreground">No investors added yet.</p>
+                <Button size="sm" variant="outline" className="w-fit" onClick={() => setAddInvestorOpen(true)}>
+                  <UserPlus className="size-3.5 mr-1.5" />
+                  Add first investor
+                </Button>
+              </div>
             ) : (
               <table className="w-full text-sm">
                 <thead>
@@ -498,6 +512,17 @@ export function FundCapTableView({
         shareClasses={shareClasses}
         currencyCode={currencyCode}
         onSaved={load}
+      />
+
+      <AddFundInvestorDialog
+        open={addInvestorOpen}
+        onClose={() => setAddInvestorOpen(false)}
+        fundId={fundId}
+        fundEntityUUID={entityUUID}
+        amEntityUUID={amEntityUUID ?? null}
+        shareClasses={shareClasses}
+        currencyCode={currencyCode}
+        onSuccess={load}
       />
     </div>
   )

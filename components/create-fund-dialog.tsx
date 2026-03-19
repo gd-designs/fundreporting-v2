@@ -38,15 +38,64 @@ export const FUND_TYPES = [
   { value: "regulated_fund", label: "Regulated Fund" },
 ]
 
+const FEE_TYPE_OPTIONS = [
+  { value: "management", label: "Management" },
+  { value: "performance", label: "Performance" },
+  { value: "entry", label: "Entry" },
+  { value: "exit", label: "Exit" },
+  { value: "administration", label: "Administration" },
+  { value: "setup", label: "Setup" },
+  { value: "other", label: "Other" },
+]
+
+const FEE_BASIS_OPTIONS = [
+  { value: "nav", label: "NAV" },
+  { value: "committed_capital", label: "Committed Capital" },
+  { value: "call_amount", label: "Call Amount" },
+  { value: "profit", label: "Profit" },
+  { value: "fixed", label: "Fixed Amount" },
+]
+
+const FEE_FREQ_OPTIONS = [
+  { value: "one_time", label: "One Time" },
+  { value: "monthly", label: "Monthly" },
+  { value: "quarterly", label: "Quarterly" },
+  { value: "semi_annual", label: "Semi-Annual" },
+  { value: "annual", label: "Annual" },
+]
+
+type FeeDraft = {
+  type: string
+  rate: string
+  basis: string
+  frequency: string
+  hurdle_rate: string
+  high_water_mark: boolean
+  catch_up_rate: string
+  fixed_amount: string
+}
+
 type ShareClassDraft = {
   name: string
-  management_fee: string
-  carried_interest: string
-  preferred_return: string
+  current_nav: string
+  fees: FeeDraft[]
+}
+
+function emptyFee(): FeeDraft {
+  return {
+    type: "management",
+    rate: "",
+    basis: "nav",
+    frequency: "annual",
+    hurdle_rate: "",
+    high_water_mark: false,
+    catch_up_rate: "",
+    fixed_amount: "",
+  }
 }
 
 function emptyShareClass(): ShareClassDraft {
-  return { name: "", management_fee: "", carried_interest: "", preferred_return: "" }
+  return { name: "", current_nav: "", fees: [] }
 }
 
 // ── Step indicator ─────────────────────────────────────────────────────────────
@@ -195,6 +244,89 @@ function FundDetailsStep({
   )
 }
 
+// ── Fee row (inside a share class card) ────────────────────────────────────────
+
+function FeeRow({
+  fee,
+  index,
+  onUpdate,
+  onRemove,
+}: {
+  fee: FeeDraft
+  index: number
+  onUpdate: (field: keyof FeeDraft, value: string | boolean) => void
+  onRemove: () => void
+}) {
+  return (
+    <div className="rounded border bg-muted/30 p-2 flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-muted-foreground">Fee {index + 1}</span>
+        <button type="button" onClick={onRemove} className="text-muted-foreground hover:text-destructive">
+          <X className="size-3" />
+        </button>
+      </div>
+      <div className="grid grid-cols-2 gap-1.5">
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Type</Label>
+          <Select value={fee.type} onValueChange={(v) => onUpdate("type", v)}>
+            <SelectTrigger className=" w-full h-7 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {FEE_TYPE_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Frequency</Label>
+          <Select value={fee.frequency} onValueChange={(v) => onUpdate("frequency", v)}>
+            <SelectTrigger className=" w-full h-7 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {FEE_FREQ_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-1.5">
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">Basis</Label>
+          <Select value={fee.basis} onValueChange={(v) => onUpdate("basis", v)}>
+            <SelectTrigger className=" w-full h-7 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {FEE_BASIS_OPTIONS.map((o) => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        {fee.basis === "fixed" ? (
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">Fixed Amount</Label>
+            <Input className="h-7 text-xs" type="number" min="0" step="0.01" placeholder="0.00" value={fee.fixed_amount} onChange={(e) => onUpdate("fixed_amount", e.target.value)} />
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">Rate (%)</Label>
+            <Input className="h-7 text-xs" type="number" min="0" step="0.01" placeholder="e.g. 2.00" value={fee.rate} onChange={(e) => onUpdate("rate", e.target.value)} />
+          </div>
+        )}
+      </div>
+      {fee.type === "performance" && (
+        <div className="grid grid-cols-2 gap-1.5">
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">Hurdle Rate (%)</Label>
+            <Input className="h-7 text-xs" type="number" min="0" step="0.01" placeholder="e.g. 8.00" value={fee.hurdle_rate} onChange={(e) => onUpdate("hurdle_rate", e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">Catch-up Rate (%)</Label>
+            <Input className="h-7 text-xs" type="number" min="0" step="0.01" placeholder="e.g. 100" value={fee.catch_up_rate} onChange={(e) => onUpdate("catch_up_rate", e.target.value)} />
+          </div>
+          <Label className="text-xs flex items-center gap-1.5 col-span-2">
+            <input type="checkbox" checked={fee.high_water_mark} onChange={(e) => onUpdate("high_water_mark", e.target.checked)} className="size-3.5 rounded border" />
+            High Water Mark
+          </Label>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Step 2: Share classes ──────────────────────────────────────────────────────
 
 function ShareClassesStep({
@@ -212,106 +344,111 @@ function ShareClassesStep({
   onBack: () => void
   onSubmit: () => void
 }) {
-  function addRow() {
+  function addShareClass() {
     setShareClasses((prev) => [...prev, emptyShareClass()])
   }
 
-  function removeRow(i: number) {
+  function removeShareClass(i: number) {
     setShareClasses((prev) => prev.filter((_, idx) => idx !== i))
   }
 
-  function update(i: number, field: keyof ShareClassDraft, value: string) {
-    setShareClasses((prev) =>
-      prev.map((sc, idx) => (idx === i ? { ...sc, [field]: value } : sc)),
-    )
+  function updateName(i: number, value: string) {
+    setShareClasses((prev) => prev.map((sc, idx) => idx === i ? { ...sc, name: value } : sc))
+  }
+
+  function updateNav(i: number, value: string) {
+    setShareClasses((prev) => prev.map((sc, idx) => idx === i ? { ...sc, current_nav: value } : sc))
+  }
+
+  function addFee(scIdx: number) {
+    setShareClasses((prev) => prev.map((sc, idx) =>
+      idx === scIdx ? { ...sc, fees: [...sc.fees, emptyFee()] } : sc
+    ))
+  }
+
+  function removeFee(scIdx: number, feeIdx: number) {
+    setShareClasses((prev) => prev.map((sc, idx) =>
+      idx === scIdx ? { ...sc, fees: sc.fees.filter((_, fi) => fi !== feeIdx) } : sc
+    ))
+  }
+
+  function updateFee(scIdx: number, feeIdx: number, field: keyof FeeDraft, value: string | boolean) {
+    setShareClasses((prev) => prev.map((sc, idx) =>
+      idx === scIdx
+        ? { ...sc, fees: sc.fees.map((f, fi) => fi === feeIdx ? { ...f, [field]: value } : f) }
+        : sc
+    ))
   }
 
   return (
     <div className="flex flex-col gap-4 mt-2">
       <p className="text-sm text-muted-foreground">
-        Add one or more share classes for this fund. You can skip this and add them later.
+        Add one or more share classes with their fee rules. You can skip this and configure them later.
       </p>
 
       {shareClasses.length === 0 ? (
         <p className="text-sm text-muted-foreground italic">No share classes added yet.</p>
       ) : (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-4 max-h-[52vh] overflow-y-auto pr-1">
           {shareClasses.map((sc, i) => (
-            <div key={i} className="rounded-md border p-3 flex flex-col gap-2">
+            <div key={i} className="rounded-md border p-3 flex flex-col gap-3">
               <div className="flex items-center justify-between">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
                   Share class {i + 1}
                 </p>
-                <button
-                  type="button"
-                  onClick={() => removeRow(i)}
-                  className="text-muted-foreground hover:text-destructive"
-                >
+                <button type="button" onClick={() => removeShareClass(i)} className="text-muted-foreground hover:text-destructive">
                   <X className="size-3.5" />
                 </button>
               </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor={`sc-name-${i}`}>Name</Label>
-                <Input
-                  id={`sc-name-${i}`}
-                  placeholder="Class A"
-                  value={sc.name}
-                  onChange={(e) => update(i, "name", e.target.value)}
-                />
-              </div>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <div className="flex flex-col gap-1.5">
-                  <Label htmlFor={`sc-mgmt-${i}`}>Mgmt fee %</Label>
+                  <Label htmlFor={`sc-name-${i}`} className="text-xs">Name</Label>
                   <Input
-                    id={`sc-mgmt-${i}`}
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.01"
-                    placeholder="2.0"
-                    value={sc.management_fee}
-                    onChange={(e) => update(i, "management_fee", e.target.value)}
+                    id={`sc-name-${i}`}
+                    placeholder="Class A"
+                    value={sc.name}
+                    onChange={(e) => updateName(i, e.target.value)}
                   />
                 </div>
                 <div className="flex flex-col gap-1.5">
-                  <Label htmlFor={`sc-carry-${i}`}>Carry %</Label>
+                  <Label htmlFor={`sc-nav-${i}`} className="text-xs">Starting NAV / share</Label>
                   <Input
-                    id={`sc-carry-${i}`}
+                    id={`sc-nav-${i}`}
                     type="number"
                     min="0"
-                    max="100"
-                    step="0.01"
-                    placeholder="20.0"
-                    value={sc.carried_interest}
-                    onChange={(e) => update(i, "carried_interest", e.target.value)}
-                  />
-                </div>
-                <div className="flex flex-col gap-1.5">
-                  <Label htmlFor={`sc-hurdle-${i}`}>Hurdle %</Label>
-                  <Input
-                    id={`sc-hurdle-${i}`}
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.01"
-                    placeholder="8.0"
-                    value={sc.preferred_return}
-                    onChange={(e) => update(i, "preferred_return", e.target.value)}
+                    step="0.0001"
+                    placeholder="e.g. 100.00"
+                    value={sc.current_nav}
+                    onChange={(e) => updateNav(i, e.target.value)}
                   />
                 </div>
               </div>
+
+              {/* Fee rows */}
+              {sc.fees.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <p className="text-xs font-medium text-muted-foreground">Fees</p>
+                  {sc.fees.map((fee, fi) => (
+                    <FeeRow
+                      key={fi}
+                      fee={fee}
+                      index={fi}
+                      onUpdate={(field, value) => updateFee(i, fi, field, value)}
+                      onRemove={() => removeFee(i, fi)}
+                    />
+                  ))}
+                </div>
+              )}
+
+              <Button type="button" variant="ghost" size="sm" className="self-start h-7 text-xs" onClick={() => addFee(i)}>
+                <Plus className="size-3" /> Add fee
+              </Button>
             </div>
           ))}
         </div>
       )}
 
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        onClick={addRow}
-        className="self-start"
-      >
+      <Button type="button" variant="outline" size="sm" onClick={addShareClass} className="self-start">
         <Plus className="size-3.5" />
         Add share class
       </Button>
@@ -420,21 +557,45 @@ export function CreateFundDialog({
       }
       const fund = fundData as CreatedFund
 
-      // 2. Create share classes (fire-and-forget individual failures)
-      const scPromises = shareClasses
-        .filter((sc) => sc.name.trim())
-        .map((sc) => {
-          const scBody: Record<string, unknown> = { entity: fund.entity, name: sc.name.trim() }
-          if (sc.management_fee) scBody.management_fee = parseFloat(sc.management_fee)
-          if (sc.carried_interest) scBody.carried_interest = parseFloat(sc.carried_interest)
-          if (sc.preferred_return) scBody.preferred_return = parseFloat(sc.preferred_return)
-          return fetch("/api/share-classes", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(scBody),
+      // 2. Create share classes and their fees (fire-and-forget individual failures)
+      await Promise.allSettled(
+        shareClasses
+          .filter((sc) => sc.name.trim())
+          .map(async (sc) => {
+            const scBody: Record<string, unknown> = { entity: fund.entity, name: sc.name.trim() }
+            if (sc.current_nav) scBody.current_nav = parseFloat(sc.current_nav)
+            const scRes = await fetch("/api/share-classes", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(scBody),
+            })
+            if (!scRes.ok) return
+            const scData = await scRes.json() as { id: string }
+
+            // Create fees for this share class
+            await Promise.allSettled(
+              sc.fees.map((fee) => {
+                const feeBody: Record<string, unknown> = {
+                  share_class: scData.id,
+                  entity: fund.entity,
+                  type: fee.type || null,
+                  basis: fee.basis || null,
+                  frequency: fee.frequency || null,
+                  rate: fee.basis !== "fixed" && fee.rate ? parseFloat(fee.rate) : null,
+                  fixed_amount: fee.basis === "fixed" && fee.fixed_amount ? parseFloat(fee.fixed_amount) : null,
+                  hurdle_rate: fee.hurdle_rate ? parseFloat(fee.hurdle_rate) : null,
+                  high_water_mark: fee.type === "performance" ? fee.high_water_mark : null,
+                  catch_up_rate: fee.catch_up_rate ? parseFloat(fee.catch_up_rate) : null,
+                }
+                return fetch("/api/share-class-fees", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(feeBody),
+                })
+              })
+            )
           })
-        })
-      await Promise.allSettled(scPromises)
+      )
 
       onCreated(fund)
       setOpen(false)
@@ -446,7 +607,7 @@ export function CreateFundDialog({
     }
   }
 
-  const STEP_LABELS = ["Fund details", "Share classes"]
+  const STEP_LABELS = ["Fund details", "Share classes & fees"]
 
   return (
     <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) reset() }}>
@@ -458,7 +619,7 @@ export function CreateFundDialog({
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent className="max-w-md">
+      <DialogContent className={step === 2 ? "max-w-lg" : "max-w-md"}>
         <DialogHeader>
           <DialogTitle>Create fund</DialogTitle>
         </DialogHeader>

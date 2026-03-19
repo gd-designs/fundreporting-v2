@@ -23,6 +23,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  // bypass=true skips all notifications, tasks, and emails — used for historical/bulk data entry
+  const bypass = req.nextUrl.searchParams.get("bypass") === "true"
   const [token, currentUser] = await Promise.all([getAuthToken(), getCurrentUser()])
   if (!token || !currentUser) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
@@ -36,8 +38,8 @@ export async function POST(req: NextRequest) {
 
   const call = await res.json() as Record<string, unknown>
 
-  // Fire-and-forget: task + notification for the LP
-  if (call.cap_table_entry) {
+  // Fire-and-forget: task + notification for the LP (skipped in bypass mode)
+  if (!bypass && call.cap_table_entry) {
     notifyLp(token, currentUser.id, call).catch(() => {})
   }
 

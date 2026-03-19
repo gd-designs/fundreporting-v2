@@ -7,15 +7,20 @@ export default async function FundCapTablePage({
 }: {
   params: Promise<{ id: string; fundId: string }>
 }) {
-  const { fundId } = await params
-  const fund = await getEntityRecord("fund", fundId)
+  const { id: amId, fundId } = await params
+  const [fund, am] = await Promise.all([
+    getEntityRecord("fund", fundId),
+    getEntityRecord("asset-manager", amId),
+  ])
   if (!fund) notFound()
 
   const currencyCode = (fund._currency as { code?: string } | null)?.code ?? "EUR"
 
   return (
     <FundCapTableView
+      fundId={fundId}
       entityUUID={fund.entity}
+      amEntityUUID={am?.entity ?? null}
       currencyCode={currencyCode}
     />
   )

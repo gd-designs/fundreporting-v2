@@ -19,6 +19,7 @@ export default async function CapTablePage({ params }: { params: Promise<{ id: s
   if (!record) notFound()
   return (
     <FundCapTableView
+      fundId={record.id}
       entityUUID={record.entity}
       fundName={record.name ?? undefined}
       currencyCode={record._currency?.code}
