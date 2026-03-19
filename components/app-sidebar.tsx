@@ -215,7 +215,7 @@ function EntityNav({
     )
   }
 
-  const overviewLabel = entityType === "portfolio" || entityType === "fund" ? "Net Worth" : "Overview"
+  const overviewLabel = "Overview"
   const netWorthFormatted = netWorth !== null
     ? new Intl.NumberFormat("en-GB", { style: "currency", currency: currencyCode, maximumFractionDigits: 2 }).format(netWorth)
     : "—"
@@ -348,11 +348,11 @@ function FundInAmNav({
       <SidebarGroup>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton asChild tooltip="Net Worth" isActive={isOverview} size="sm">
+            <SidebarMenuButton asChild tooltip="Overview" isActive={isOverview} size="sm">
               <Link href={base}>
                 <Globe className="shrink-0" />
                 <div className="flex flex-1 items-center justify-between min-w-0">
-                  <span>Net Worth</span>
+                  <span>Overview</span>
                   <span className="text-xs tabular-nums text-muted-foreground group-data-[collapsible=icon]:hidden">
                     {netWorthFormatted}
                   </span>
@@ -568,11 +568,26 @@ export function AppSidebar({ user, entities: initialEntities, ...props }: AppSid
     ? entities.find(e => e.id === entityRoute.id)
     : undefined
 
+  // For fund-in-AM context: fetch AM's funds for the switcher
+  const [amFunds, setAmFunds] = React.useState<FundItem[]>([])
+  React.useEffect(() => {
+    if (!fundInAmRoute) { setAmFunds([]); return }
+    fetch(`/api/funds?managed_by=${fundInAmRoute.amId}`)
+      .then(r => r.json())
+      .then((data: FundItem[]) => setAmFunds(Array.isArray(data) ? data : []))
+      .catch(() => setAmFunds([]))
+  }, [fundInAmRoute?.amId])
+
   // For fund-in-AM context: get net worth entity from the fund
   const netWorthEntityId = fundInAmRoute?.fundId ?? entityRoute?.id
-  const netWorthEntity = entities.find(e => e.id === netWorthEntityId)
-  const entityUUID = netWorthEntity?.entity
-  const currencyCode = netWorthEntity?._currency?.code
+  const netWorthEntity = entityRoute
+    ? entities.find(e => e.id === netWorthEntityId)
+    : undefined
+  const activeFund = fundInAmRoute
+    ? amFunds.find(f => f.id === fundInAmRoute.fundId)
+    : undefined
+  const entityUUID = activeFund?.entity ?? netWorthEntity?.entity
+  const currencyCode = activeFund?._currency?.code ?? netWorthEntity?._currency?.code
 
   const [netWorth, setNetWorth] = React.useState<number | null>(null)
   React.useEffect(() => {
@@ -589,16 +604,6 @@ export function AppSidebar({ user, entities: initialEntities, ...props }: AppSid
     window.addEventListener("ledger:update", fetchNetWorth)
     return () => window.removeEventListener("ledger:update", fetchNetWorth)
   }, [netWorthEntityId, entityUUID, currencyCode])
-
-  // For fund-in-AM context: fetch AM's funds for the switcher
-  const [amFunds, setAmFunds] = React.useState<FundItem[]>([])
-  React.useEffect(() => {
-    if (!fundInAmRoute) { setAmFunds([]); return }
-    fetch(`/api/funds?managed_by=${fundInAmRoute.amId}`)
-      .then(r => r.json())
-      .then((data: FundItem[]) => setAmFunds(Array.isArray(data) ? data : []))
-      .catch(() => setAmFunds([]))
-  }, [fundInAmRoute?.amId])
 
   const amName = fundInAmRoute
     ? (entities.find(e => e.id === fundInAmRoute.amId)?.name ?? null)

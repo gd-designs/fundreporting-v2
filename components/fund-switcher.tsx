@@ -22,6 +22,8 @@ import {
 export type FundItem = {
   id: string
   name?: string | null
+  entity?: string | null
+  _currency?: { code?: string | null } | null
 }
 
 function initials(name: string | null | undefined) {
