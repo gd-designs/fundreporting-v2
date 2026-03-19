@@ -67,7 +67,7 @@ export type CapTableShareholder = {
   notes: string | null
   parent_shareholder?: string | null
   created_at: number
-  _cap_table_entry?: CapTableShEntry[] | null
+  _cap_table_entry?: CapTableEntry[] | null
   _parent_shareholder?: CapTableFundChild[] | null
 }
 

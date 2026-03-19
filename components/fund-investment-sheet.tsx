@@ -515,7 +515,7 @@ export function FundInvestmentSheet({
                             </td>
                             <td className="px-3 py-2.5">
                               {isLocked ? (
-                                <Lock className="size-3 text-muted-foreground/40" title="Locked — payment received" />
+                                <Lock className="size-3 text-muted-foreground/40" />
                               ) : (
                                 <DropdownMenu>
                                   <DropdownMenuTrigger asChild>
