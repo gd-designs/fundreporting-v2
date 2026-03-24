@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { ChevronDown, ChevronRight, MoreHorizontal, Lock, Pencil, Trash2, UserPlus } from "lucide-react"
+import { ChevronDown, ChevronRight, MoreHorizontal, Lock, Pencil, Plus, Trash2, UserPlus } from "lucide-react"
 import {
   fetchCapitalCalls,
   fetchCapTableEntries,
@@ -17,6 +17,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Spinner } from "@/components/ui/spinner"
 import { CapitalCallReceive } from "@/components/capital-call-receive"
 import { AddFundInvestorDialog } from "@/components/add-fund-investor-dialog"
+import { AddShareClassDialog } from "@/components/add-share-class-dialog"
+import { EditShareClassDialog } from "@/components/edit-share-class-dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -194,6 +196,7 @@ type EntryGroup = {
   calls: CapitalCall[]
 }
 
+
 type ShareholderGroup = {
   shareholder: CapTableShareholder
   entries: EntryGroup[]
@@ -278,6 +281,8 @@ export function FundCapTableView({
   const [expandedRows, setExpandedRows] = React.useState<Set<string>>(new Set())
   const [editDialog, setEditDialog] = React.useState<{ open: boolean; call: CapitalCall | null }>({ open: false, call: null })
   const [addInvestorOpen, setAddInvestorOpen] = React.useState(false)
+  const [addShareClassOpen, setAddShareClassOpen] = React.useState(false)
+  const [editShareClass, setEditShareClass] = React.useState<ShareClass | null>(null)
 
   async function load() {
     setLoading(true)
@@ -355,6 +360,10 @@ export function FundCapTableView({
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-3">
             <CardTitle className="text-base">Share Classes</CardTitle>
+            <Button size="sm" variant="outline" onClick={() => setAddShareClassOpen(true)}>
+              <Plus className="size-3.5 mr-1.5" />
+              Add share class
+            </Button>
           </CardHeader>
           <CardContent>
             {shareClasses.length === 0 ? (
@@ -362,12 +371,16 @@ export function FundCapTableView({
             ) : (
               <div className="flex flex-wrap gap-2">
                 {shareClasses.map((sc) => (
-                  <div key={sc.id} className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm">
+                  <button
+                    key={sc.id}
+                    onClick={() => setEditShareClass(sc)}
+                    className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm hover:bg-muted/50 transition-colors text-left"
+                  >
                     <span className="font-medium">{sc.name ?? "—"}</span>
                     {sc.current_nav != null && (
                       <span className="text-xs text-muted-foreground">{fmtCurrency(sc.current_nav, currencyCode)}/share</span>
                     )}
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
@@ -652,6 +665,19 @@ export function FundCapTableView({
         shareClasses={shareClasses}
         currencyCode={currencyCode}
         onSuccess={load}
+      />
+      <AddShareClassDialog
+        open={addShareClassOpen}
+        onClose={() => setAddShareClassOpen(false)}
+        entityUUID={entityUUID}
+        onSaved={load}
+      />
+      <EditShareClassDialog
+        open={editShareClass !== null}
+        onClose={() => setEditShareClass(null)}
+        shareClass={editShareClass}
+        entityUUID={entityUUID}
+        onSaved={load}
       />
     </div>
   )

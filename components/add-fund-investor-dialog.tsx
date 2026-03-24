@@ -141,9 +141,9 @@ export function AddFundInvestorDialog({
     setEntryFeeRate(fee?.rate != null ? String(fee.rate * 100) : "")
   }, [shareClassId, shareClasses])
 
-  // Sync committed → call amount (first time only)
+  // Sync committed → call amount (always mirrors unless user overrides)
   React.useEffect(() => {
-    if (callAmount === "" && committedAmount) setCallAmount(committedAmount)
+    setCallAmount(committedAmount)
   }, [committedAmount])
 
   // Derived

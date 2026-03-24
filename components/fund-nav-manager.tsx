@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog"
 import { Field, FieldLabel, FieldError } from "@/components/ui/field"
 import { DatePickerInput } from "@/components/date-input"
-import { fetchShareClasses, fetchCapTableEntries, type ShareClass, type CapTableEntry } from "@/lib/cap-table"
+import { fetchShareClasses, fetchCapTableEntries, type ShareClass, type CapTableEntry, type CapitalCall } from "@/lib/cap-table"
 import { Lock, Plus, ChevronDown, ChevronUp } from "lucide-react"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -38,17 +38,6 @@ type FundMutation = {
     id: string
     _shareholder?: { id: string; name?: string | null; email?: string | null } | null
   } | null
-}
-
-type MutationGroup = {
-  id: string
-  entity?: string | null
-  status?: "draft" | "confirmed" | null
-  label?: string | null
-  date?: number | null
-  notes?: string | null
-  created_at?: number | null
-  _fund_mutation?: FundMutation[] | null
 }
 
 type FundPeriod = {
@@ -177,13 +166,13 @@ function AddMutationDialog({
   open,
   onClose,
   entityUUID,
-  groupId,
+  periodId,
   onSuccess,
 }: {
   open: boolean
   onClose: () => void
   entityUUID: string
-  groupId: string
+  periodId: string | null
   onSuccess: () => void
 }) {
   const [entries, setEntries] = React.useState<CapTableEntry[]>([])
@@ -215,7 +204,7 @@ function AddMutationDialog({
     try {
       const body: Record<string, unknown> = {
         entity: entityUUID,
-        mutation_group: groupId,
+        ...(periodId ? { period: periodId } : {}),
         cap_table_entry: entryId,
         type,
         nav_per_share: Number(navPerShare),
@@ -312,47 +301,362 @@ function AddMutationDialog({
   )
 }
 
-// ─── Confirm Group → Open Period ──────────────────────────────────────────────
+// ─── Deploy Call Dialog ───────────────────────────────────────────────────────
+// Converts a single undeployed capital call into a fund_mutation subscription.
+// If no period is open, also creates one.
 
-function ConfirmGroupDialog({
+function DeployCallDialog({
   open,
   onClose,
   entityUUID,
-  group,
+  call,
+  entry,
+  openPeriod,
   previousPeriod,
-  shareClasses,
   currencyCode,
   onSuccess,
 }: {
   open: boolean
   onClose: () => void
   entityUUID: string
-  group: MutationGroup
+  call: CapitalCall
+  entry: CapTableEntry
+  openPeriod: FundPeriod | null
   previousPeriod: FundPeriod | null
-  shareClasses: ShareClass[]
   currencyCode: string
   onSuccess: () => void
 }) {
-  const mutations = group._fund_mutation ?? []
-  const subscriptions = mutations.filter((m) => m.type === "subscription")
-  const navStart = subscriptions[0]?.nav_per_share ?? null
-  const totalAumStart = subscriptions.reduce((s, m) => s + (m.amount_for_shares ?? 0), 0)
-  const totalSharesStart = previousPeriod?.total_shares_end ?? 0
-  const newSharesIssued = subscriptions.reduce((s, m) => s + (m.shares_issued ?? 0), 0)
-
-  const [label, setLabel] = React.useState(group.label ?? "")
-  const [openedAt, setOpenedAt] = React.useState<Date | undefined>(
-    group.date ? new Date(group.date) : new Date()
-  )
+  const defaultNav = call._share_class?.current_nav ?? openPeriod?.nav_start ?? null
+  const [navPerShare, setNavPerShare] = React.useState(defaultNav != null ? String(defaultNav) : "")
+  const [amountInvested, setAmountInvested] = React.useState(call.amount != null ? String(call.amount) : "")
+  const [feeRate, setFeeRate] = React.useState("")
+  const [feeAmountOverride, setFeeAmountOverride] = React.useState("")
+  const [mutationAt, setMutationAt] = React.useState<Date | undefined>(new Date())
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
-  async function handleConfirm() {
-    if (mutations.length === 0) { setError("Group has no mutations."); return }
-    setSaving(true)
-    setError(null)
+  const nav = navPerShare ? Number(navPerShare) : null
+  const grossAmount = amountInvested ? Number(amountInvested) : 0
+  // fee_amount: manual override takes precedence, otherwise derived from fee_rate
+  const feeAmount = feeAmountOverride !== ""
+    ? Number(feeAmountOverride)
+    : feeRate ? (grossAmount * Number(feeRate)) / 100 : 0
+  const amountForShares = grossAmount - feeAmount
+  const sharesIssued = nav && nav > 0 && amountForShares > 0 ? amountForShares / nav : null
+
+  async function handleDeploy() {
+    if (!nav || nav <= 0) { setError("NAV per share is required."); return }
+    if (grossAmount <= 0) { setError("Amount invested is required."); return }
+    setSaving(true); setError(null)
     try {
-      const periodRes = await fetch("/api/fund-periods", {
+      const mutRes = await fetch("/api/fund-mutations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entity: entityUUID,
+          ...(openPeriod ? { period: openPeriod.id } : {}),
+          cap_table_entry: entry.id,
+          type: "subscription",
+          nav_per_share: nav,
+          amount_invested: grossAmount,
+          ...(feeRate ? { fee_rate: Number(feeRate) / 100 } : {}),
+          ...(feeAmount > 0 ? { fee_amount: feeAmount } : {}),
+          amount_for_shares: amountForShares,
+          ...(sharesIssued != null ? { shares_issued: sharesIssued } : {}),
+          mutation_at: mutationAt ? mutationAt.getTime() : Date.now(),
+        }),
+      })
+      if (!mutRes.ok) throw new Error("Failed to create mutation")
+      await fetch(`/api/capital-calls/${call.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deployed_at: Date.now() }),
+      })
+      onSuccess()
+      onClose()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to subscribe")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v && !saving) onClose() }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Subscribe</DialogTitle>
+          <p className="text-sm text-muted-foreground">Convert this capital call into a fund subscription mutation.</p>
+        </DialogHeader>
+        <div className="flex flex-col gap-3 py-1">
+          <div className="rounded-lg border p-3 bg-muted/30 text-sm flex flex-col gap-1">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Investor</span>
+              <span className="font-medium">{entry._shareholder?.name ?? "—"}</span>
+            </div>
+            {call._share_class?.name && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Share class</span>
+                <span className="font-medium">{call._share_class.name}</span>
+              </div>
+            )}
+            {openPeriod && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Period</span>
+                <span className="font-medium">{openPeriod.label ?? fmtDate(openPeriod.opened_at)}</span>
+              </div>
+            )}
+          </div>
+
+          <Field>
+            <FieldLabel htmlFor="deploy-nav">NAV per share</FieldLabel>
+            <Input id="deploy-nav" type="number" min="0" step="0.0001" placeholder="0.0000" value={navPerShare} onChange={(e) => setNavPerShare(e.target.value)} />
+          </Field>
+
+          <Field>
+            <FieldLabel htmlFor="deploy-gross">Amount invested (gross)</FieldLabel>
+            <Input id="deploy-gross" type="number" min="0" step="0.01" placeholder="0.00" value={amountInvested} onChange={(e) => setAmountInvested(e.target.value)} />
+          </Field>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field>
+              <FieldLabel htmlFor="deploy-fee-rate">Entry fee rate (%)</FieldLabel>
+              <Input id="deploy-fee-rate" type="number" min="0" step="0.01" placeholder="0.00" value={feeRate} onChange={(e) => { setFeeRate(e.target.value); setFeeAmountOverride("") }} />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="deploy-fee-amount">Fee amount</FieldLabel>
+              <Input id="deploy-fee-amount" type="number" min="0" step="0.01" placeholder="0.00" value={feeAmountOverride !== "" ? feeAmountOverride : feeAmount > 0 ? String(feeAmount) : ""} onChange={(e) => setFeeAmountOverride(e.target.value)} />
+            </Field>
+          </div>
+
+          <div className="rounded-lg border p-3 bg-muted/30 text-sm flex flex-col gap-1">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Amount for shares</span>
+              <span className="font-medium">{fmtCcy(amountForShares, currencyCode)}</span>
+            </div>
+            {sharesIssued != null && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Shares to issue</span>
+                <span className="font-medium">{fmt(sharesIssued, 4)}</span>
+              </div>
+            )}
+          </div>
+
+          <DatePickerInput id="deploy-date" label="Subscription date" value={mutationAt} onChange={setMutationAt} />
+          {error && <FieldError>{error}</FieldError>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={handleDeploy} disabled={saving || !nav || grossAmount <= 0}>
+            {saving && <Spinner className="size-4 mr-2" />}
+            Subscribe
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ─── Subscribe All Dialog ─────────────────────────────────────────────────────
+
+function SubscribeAllDialog({
+  open,
+  onClose,
+  entityUUID,
+  calls,
+  openPeriod,
+  previousPeriod,
+  currencyCode,
+  onSuccess,
+}: {
+  open: boolean
+  onClose: () => void
+  entityUUID: string
+  calls: Array<{ call: CapitalCall; entry: CapTableEntry }>
+  openPeriod: FundPeriod | null
+  previousPeriod: FundPeriod | null
+  currencyCode: string
+  onSuccess: () => void
+}) {
+  const defaultNav = openPeriod?.nav_start ?? null
+  const [navPerShare, setNavPerShare] = React.useState(defaultNav != null ? String(defaultNav) : "")
+  const [feeRate, setFeeRate] = React.useState("")
+  const [mutationAt, setMutationAt] = React.useState<Date | undefined>(new Date())
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  const nav = navPerShare ? Number(navPerShare) : null
+  const feeRateNum = feeRate ? Number(feeRate) : 0
+  const totalGross = calls.reduce((s, { call }) => s + (call.amount ?? 0), 0)
+  const totalFees = totalGross * feeRateNum / 100
+  const totalForShares = totalGross - totalFees
+
+  React.useEffect(() => {
+    if (open) {
+      setNavPerShare(openPeriod?.nav_start != null ? String(openPeriod.nav_start) : "")
+      setFeeRate(""); setMutationAt(new Date()); setError(null)
+    }
+  }, [open, openPeriod?.nav_start])
+
+  async function handleSubscribeAll() {
+    if (!nav || nav <= 0) { setError("NAV per share is required."); return }
+    setSaving(true); setError(null)
+    try {
+      const mutationTs = mutationAt ? mutationAt.getTime() : Date.now()
+      await Promise.all(
+        calls.map(async ({ call, entry }) => {
+          const gross = call.amount ?? 0
+          const feeAmt = gross * feeRateNum / 100
+          const amountForShares = gross - feeAmt
+          const sharesIssued = nav > 0 && amountForShares > 0 ? amountForShares / nav : null
+          await fetch("/api/fund-mutations", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              entity: entityUUID,
+              ...(openPeriod ? { period: openPeriod.id } : {}),
+              cap_table_entry: entry.id,
+              type: "subscription",
+              nav_per_share: nav,
+              amount_invested: gross,
+              ...(feeRateNum > 0 ? { fee_rate: feeRateNum / 100 } : {}),
+              ...(feeAmt > 0 ? { fee_amount: feeAmt } : {}),
+              amount_for_shares: amountForShares,
+              ...(sharesIssued != null ? { shares_issued: sharesIssued } : {}),
+              mutation_at: mutationTs,
+            }),
+          })
+          await fetch(`/api/capital-calls/${call.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ deployed_at: Date.now() }),
+          })
+        })
+      )
+      onSuccess()
+      onClose()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to subscribe")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v && !saving) onClose() }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Subscribe all</DialogTitle>
+          <p className="text-sm text-muted-foreground">
+            Create subscription mutations for all {calls.length} pending capital call{calls.length !== 1 ? "s" : ""}.
+          </p>
+        </DialogHeader>
+        <div className="flex flex-col gap-3 py-1">
+          <div className="rounded-lg border p-3 bg-muted/30 text-sm flex flex-col gap-1">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Investors</span>
+              <span className="font-medium">{calls.length}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Total gross</span>
+              <span className="font-medium">{fmtCcy(totalGross, currencyCode)}</span>
+            </div>
+            {openPeriod && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Period</span>
+                <span className="font-medium">{openPeriod.label ?? fmtDate(openPeriod.opened_at)}</span>
+              </div>
+            )}
+          </div>
+
+          <Field>
+            <FieldLabel htmlFor="sa-nav">NAV per share</FieldLabel>
+            <Input id="sa-nav" type="number" min="0" step="0.0001" placeholder="0.0000" value={navPerShare} onChange={(e) => setNavPerShare(e.target.value)} />
+          </Field>
+
+          <Field>
+            <FieldLabel htmlFor="sa-fee-rate">Entry fee rate (%) — applied to all</FieldLabel>
+            <Input id="sa-fee-rate" type="number" min="0" step="0.01" placeholder="0.00" value={feeRate} onChange={(e) => setFeeRate(e.target.value)} />
+          </Field>
+
+          <div className="rounded-lg border p-3 bg-muted/30 text-sm flex flex-col gap-1">
+            {totalFees > 0 && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Total fees</span>
+                <span className="font-medium text-red-600">−{fmtCcy(totalFees, currencyCode)}</span>
+              </div>
+            )}
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Total for shares</span>
+              <span className="font-medium">{fmtCcy(totalForShares, currencyCode)}</span>
+            </div>
+            {nav && nav > 0 && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Total shares to issue</span>
+                <span className="font-medium">{fmt(totalForShares / nav, 4)}</span>
+              </div>
+            )}
+          </div>
+
+          <DatePickerInput id="sa-date" label="Subscription date" value={mutationAt} onChange={setMutationAt} />
+          {error && <FieldError>{error}</FieldError>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={handleSubscribeAll} disabled={saving || !nav}>
+            {saving && <Spinner className="size-4 mr-2" />}
+            Subscribe all ({calls.length})
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ─── Open Period Dialog ───────────────────────────────────────────────────────
+
+function OpenPeriodDialog({
+  open,
+  onClose,
+  entityUUID,
+  previousPeriod,
+  pendingMutations,
+  currencyCode,
+  onSuccess,
+}: {
+  open: boolean
+  onClose: () => void
+  entityUUID: string
+  previousPeriod: FundPeriod | null
+  pendingMutations: FundMutation[]
+  currencyCode: string
+  onSuccess: () => void
+}) {
+  const [label, setLabel] = React.useState("")
+  const [openedAt, setOpenedAt] = React.useState<Date | undefined>(new Date())
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    if (open) { setLabel(""); setOpenedAt(new Date()); setError(null) }
+  }, [open])
+
+  const totalSubsIn = pendingMutations
+    .filter((m) => m.type === "subscription")
+    .reduce((s, m) => s + (m.amount_for_shares ?? 0), 0)
+
+  async function handleOpen() {
+    setSaving(true); setError(null)
+    try {
+      const pendingSubs = pendingMutations.filter((m) => m.type === "subscription")
+      // Derive nav_start from the first pending subscription's nav_per_share
+      const navStart = pendingSubs[0]?.nav_per_share ?? null
+      // total_shares_start = shares carried from previous period + shares issued in pending subscriptions
+      const newSharesIssued = pendingSubs.reduce((s, m) => s + (m.shares_issued ?? 0), 0)
+      const totalSharesStart = (previousPeriod?.total_shares_end ?? 0) + newSharesIssued
+      // total_aum_start = sum of all subscription amounts in pending mutations
+      const totalAumStart = pendingSubs.reduce((s, m) => s + (m.amount_for_shares ?? 0), 0)
+      const res = await fetch("/api/fund-periods", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -365,37 +669,20 @@ function ConfirmGroupDialog({
           ...(totalAumStart > 0 ? { total_aum_start: totalAumStart } : {}),
         }),
       })
-      if (!periodRes.ok) throw new Error("Failed to create period")
-      const period = (await periodRes.json()) as { id: string }
-
-      await Promise.all(
-        mutations.map((m) =>
-          fetch(`/api/fund-mutations/${m.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ period: period.id }),
-          })
-        )
-      )
-
-      if (navStart != null) {
+      if (!res.ok) throw new Error("Failed to open period")
+      const newPeriod = await res.json() as { id: string }
+      // Link all pending (period-less) mutations to the new period
+      if (pendingMutations.length > 0) {
         await Promise.all(
-          shareClasses.map((sc) =>
-            fetch(`/api/share-classes/${sc.id}`, {
+          pendingMutations.map((m) =>
+            fetch(`/api/fund-mutations/${m.id}`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ current_nav: navStart }),
+              body: JSON.stringify({ period: newPeriod.id }),
             })
           )
         )
       }
-
-      await fetch(`/api/fund-mutation-groups/${group.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "confirmed" }),
-      })
-
       onSuccess()
       onClose()
     } catch (e) {
@@ -407,53 +694,42 @@ function ConfirmGroupDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v && !saving) onClose() }}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Open period from group</DialogTitle>
-          <p className="text-sm text-muted-foreground">
-            Creates a new open period and links {mutations.length} mutation{mutations.length !== 1 ? "s" : ""} to it.
-          </p>
-        </DialogHeader>
-        <div className="flex flex-col gap-4 py-1">
-          <div className="rounded-lg border p-3 bg-muted/30 text-sm flex flex-col gap-1.5">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">NAV start</span>
-              <span className="font-medium">{fmtCcy(navStart, currencyCode)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Total AUM in</span>
-              <span className="font-medium">{fmtCcy(totalAumStart, currencyCode)}</span>
-            </div>
-            {totalSharesStart > 0 && (
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader><DialogTitle>Open new period</DialogTitle></DialogHeader>
+        <div className="flex flex-col gap-3 py-1">
+          {pendingMutations.length > 0 && (
+            <div className="rounded-lg border p-3 bg-muted/30 text-sm flex flex-col gap-1">
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Shares carried forward</span>
-                <span className="font-medium">{fmt(totalSharesStart, 4)}</span>
+                <span className="text-muted-foreground">Pending mutations</span>
+                <span className="font-medium">{pendingMutations.length} will be linked</span>
               </div>
-            )}
-            {newSharesIssued > 0 && (
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">New shares to be issued</span>
-                <span className="font-medium text-emerald-600">+{fmt(newSharesIssued, 4)}</span>
-              </div>
-            )}
-            <div className="flex justify-between border-t pt-1.5 mt-0.5">
-              <span className="text-muted-foreground">Shares at period start</span>
-              <span className="font-medium">{fmt(totalSharesStart, 4)}</span>
+              {totalSubsIn > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Subscriptions total</span>
+                  <span className="font-medium text-emerald-600">+{fmtCcy(totalSubsIn, currencyCode)}</span>
+                </div>
+              )}
+              {previousPeriod?.total_shares_end != null && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Shares carried forward</span>
+                  <span className="font-medium">{fmt(previousPeriod.total_shares_end, 4)}</span>
+                </div>
+              )}
             </div>
-          </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <Field>
-              <FieldLabel htmlFor="conf-label">Period label</FieldLabel>
-              <Input id="conf-label" placeholder="e.g. Period 1" value={label} onChange={(e) => setLabel(e.target.value)} />
+              <FieldLabel htmlFor="op-label">Period label</FieldLabel>
+              <Input id="op-label" placeholder="e.g. Period 1" value={label} onChange={(e) => setLabel(e.target.value)} />
             </Field>
-            <DatePickerInput id="conf-opened-at" label="Opening date" value={openedAt} onChange={setOpenedAt} />
+            <DatePickerInput id="op-opened-at" label="Opening date" value={openedAt} onChange={setOpenedAt} />
           </div>
           {error && <FieldError>{error}</FieldError>}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
-          <Button onClick={handleConfirm} disabled={saving || mutations.length === 0}>
-            {saving ? <Spinner className="size-4 mr-2" /> : <Lock className="size-4 mr-2" />}
+          <Button onClick={handleOpen} disabled={saving}>
+            {saving ? <Spinner className="size-4 mr-2" /> : <Plus className="size-4 mr-2" />}
             Open period
           </Button>
         </DialogFooter>
@@ -503,6 +779,7 @@ function OpenPeriodSnapshot({
   previousPeriod,
   periodFrequency,
   onRefresh,
+  onAddMutation,
 }: {
   period: FundPeriod
   mutations: FundMutation[]
@@ -512,6 +789,7 @@ function OpenPeriodSnapshot({
   previousPeriod: FundPeriod | null
   periodFrequency?: string | null
   onRefresh: () => void
+  onAddMutation: () => void
 }) {
   const [stats, setStats] = React.useState<EntityStats>(null)
   const [statsLoading, setStatsLoading] = React.useState(true)
@@ -606,10 +884,16 @@ function OpenPeriodSnapshot({
             {" "}· Tentative snapshot
           </p>
         </div>
-        <Button size="sm" variant="outline" onClick={() => setCloseOpen(true)}>
-          <Lock className="size-3.5 mr-1.5" />
-          Close period
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={onAddMutation}>
+            <Plus className="size-3.5 mr-1.5" />
+            Add mutation
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setCloseOpen(true)}>
+            <Lock className="size-3.5 mr-1.5" />
+            Close period
+          </Button>
+        </div>
       </div>
 
       {/* Snapshot grid — 3 equal-height columns, 5 rows each */}
@@ -644,7 +928,7 @@ function OpenPeriodSnapshot({
               <SnapRow label="Total invested assets" value={assetsValue != null ? fmtCcy(assetsValue, currencyCode) : "—"} />
               <SnapRow
                 label="Total debt / liabilities"
-                value={liabilitiesValue != null ? <span className="text-red-600">−{fmtCcy(liabilitiesValue, currencyCode)}</span> : "—"}
+                value={liabilitiesValue != null && liabilitiesValue > 0 ? <span className="text-red-600">−{fmtCcy(liabilitiesValue, currencyCode)}</span> : liabilitiesValue === 0 ? fmtCcy(0, currencyCode) : "—"}
               />
               <SnapRow label="Gross AUM" value={grossAum != null ? fmtCcy(grossAum, currencyCode) : "—"} />
               <SnapRow
@@ -671,7 +955,7 @@ function OpenPeriodSnapshot({
               value={
                 <span className="flex items-center gap-2">
                   <span>{grossNavPerShare != null ? fmtCcy(grossNavPerShare, currencyCode) : statsLoading ? "Loading…" : "—"}</span>
-                  {grossYield != null && (
+                  {grossNavPerShare != null && grossNavPerShare > 0 && grossYield != null && (
                     <span className={`text-[10px] ${grossYield >= 0 ? "text-emerald-600" : "text-red-600"}`}>
                       {grossYield >= 0 ? "+" : ""}{fmtPct(grossYield)}
                     </span>
@@ -681,13 +965,13 @@ function OpenPeriodSnapshot({
             />
             <SnapRow
               label={`Management fee/share${mgmtFeeRate ? ` (${mgmtFeeRate})` : ""}`}
-              value={mgmtFeePerShare != null
+              value={mgmtFeePerShare != null && mgmtFeePerShare > 0
                 ? <span className="text-red-600">−{fmtCcy(mgmtFeePerShare, currencyCode)}</span>
                 : <span className="text-muted-foreground">—</span>}
             />
             <SnapRow
               label="Management fee total"
-              value={mgmtFeeTotal != null
+              value={mgmtFeeTotal != null && mgmtFeeTotal > 0
                 ? <span className="text-red-600">−{fmtCcy(mgmtFeeTotal, currencyCode)}</span>
                 : <span className="text-muted-foreground">—</span>}
             />
@@ -696,7 +980,7 @@ function OpenPeriodSnapshot({
               value={
                 <span className="flex items-center gap-2">
                   <span>{netNavPerShare != null ? fmtCcy(netNavPerShare, currencyCode) : statsLoading ? "Loading…" : "—"}</span>
-                  {netYield != null && (
+                  {netNavPerShare != null && netNavPerShare > 0 && netYield != null && (
                     <span className={`text-[10px] ${netYield >= 0 ? "text-emerald-600" : "text-red-600"}`}>
                       {netYield >= 0 ? "+" : ""}{fmtPct(netYield)}
                     </span>
@@ -729,111 +1013,6 @@ function OpenPeriodSnapshot({
           totalAum: tentativeNetAum ?? undefined,
         }}
         onSuccess={() => { setCloseOpen(false); onRefresh() }}
-      />
-    </div>
-  )
-}
-
-// ─── Mutation Group Card (draft) ──────────────────────────────────────────────
-
-function MutationGroupCard({
-  group,
-  entityUUID,
-  previousPeriod,
-  shareClasses,
-  currencyCode,
-  onRefresh,
-}: {
-  group: MutationGroup
-  entityUUID: string
-  previousPeriod: FundPeriod | null
-  shareClasses: ShareClass[]
-  currencyCode: string
-  onRefresh: () => void
-}) {
-  const [expanded, setExpanded] = React.useState(true)
-  const [addOpen, setAddOpen] = React.useState(false)
-  const [confirmOpen, setConfirmOpen] = React.useState(false)
-
-  const mutations = group._fund_mutation ?? []
-  const subscriptions = mutations.filter((m) => m.type === "subscription")
-  const redemptions = mutations.filter((m) => m.type === "redemption")
-  const distributions = mutations.filter((m) => m.type === "distribution")
-  const totalAum = subscriptions.reduce((s, m) => s + (m.amount_for_shares ?? 0), 0)
-  const totalShares = subscriptions.reduce((s, m) => s + (m.shares_issued ?? 0), 0)
-  const navPerShare = subscriptions[0]?.nav_per_share ?? null
-
-  const typeSummary = [
-    subscriptions.length > 0 ? `${subscriptions.length} subscription${subscriptions.length > 1 ? "s" : ""}` : null,
-    redemptions.length > 0 ? `${redemptions.length} redemption${redemptions.length > 1 ? "s" : ""}` : null,
-    distributions.length > 0 ? `${distributions.length} distribution${distributions.length > 1 ? "s" : ""}` : null,
-  ].filter(Boolean).join(", ")
-
-  return (
-    <div className="rounded-xl border bg-card overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b">
-        <div className="flex items-center gap-2">
-          <button type="button" onClick={() => setExpanded((v) => !v)} className="text-muted-foreground hover:text-foreground">
-            {expanded ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
-          </button>
-          <span className="font-medium text-sm">{group.label ?? "Unnamed group"}</span>
-          {group.date && <span className="text-xs text-muted-foreground">{fmtDate(group.date)}</span>}
-          <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[11px] font-medium">
-            Draft
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground">{typeSummary || "No mutations"}</span>
-          <Button size="sm" variant="outline" onClick={() => setAddOpen(true)}>
-            <Plus className="size-3.5 mr-1" />
-            Add
-          </Button>
-          <Button size="sm" onClick={() => setConfirmOpen(true)} disabled={mutations.length === 0}>
-            <Lock className="size-3.5 mr-1" />
-            Open period
-          </Button>
-        </div>
-      </div>
-
-      {expanded && (
-        mutations.length === 0 ? (
-          <p className="text-sm text-muted-foreground text-center py-8">
-            No mutations yet — add subscriptions, redemptions, or distributions.
-          </p>
-        ) : (
-          <>
-            <MutationRows mutations={mutations} currencyCode={currencyCode} />
-            <div className="flex items-center gap-6 px-4 py-2.5 bg-muted/20 border-t text-xs text-muted-foreground">
-              {navPerShare != null && (
-                <span>NAV/share: <span className="font-medium text-foreground">{fmtCcy(navPerShare, currencyCode)}</span></span>
-              )}
-              {totalAum > 0 && (
-                <span>Total in: <span className="font-medium text-foreground">{fmtCcy(totalAum, currencyCode)}</span></span>
-              )}
-              {totalShares > 0 && (
-                <span>Shares: <span className="font-medium text-foreground">{fmt(totalShares, 4)}</span></span>
-              )}
-            </div>
-          </>
-        )
-      )}
-
-      <AddMutationDialog
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
-        entityUUID={entityUUID}
-        groupId={group.id}
-        onSuccess={onRefresh}
-      />
-      <ConfirmGroupDialog
-        open={confirmOpen}
-        onClose={() => setConfirmOpen(false)}
-        entityUUID={entityUUID}
-        group={group}
-        previousPeriod={previousPeriod}
-        shareClasses={shareClasses}
-        currencyCode={currencyCode}
-        onSuccess={onRefresh}
       />
     </div>
   )
@@ -967,57 +1146,6 @@ function ClosePeriodDialog({
           })
         )
       )
-
-      // Auto-create a draft mutation group for the next period.
-      // Only create placeholder subscriptions for cap table entries that have
-      // pending or partial capital calls (new capital being deployed).
-      try {
-        const capTableEntries = await fetchCapTableEntries(entityUUID)
-        // Filter to entries with at least one pending/partial capital call
-        type EntryCandiate = { entryId: string; amount: number | null }
-        const candidates: EntryCandiate[] = capTableEntries.flatMap((entry) => {
-          // Capital calls that have not yet been deployed into a mutation
-          const undeployedCalls = (entry._capital_call ?? []).filter(
-            (cc) => cc.deployed_at == null
-          )
-          if (undeployedCalls.length === 0) return []
-          const totalAmount = undeployedCalls.reduce((s, cc) => s + (cc.amount ?? 0), 0)
-          return [{ entryId: entry.id, amount: totalAmount > 0 ? totalAmount : null }]
-        })
-        if (candidates.length > 0) {
-          const newGroupRes = await fetch("/api/fund-mutation-groups", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ entity: entityUUID, status: "draft" }),
-          })
-          if (newGroupRes.ok) {
-            const newGroup = await newGroupRes.json() as { id: string }
-            await Promise.all(
-              candidates.map(({ entryId, amount }) => {
-                const body: Record<string, unknown> = {
-                  entity: entityUUID,
-                  mutation_group: newGroup.id,
-                  cap_table_entry: entryId,
-                  type: "subscription",
-                  nav_per_share: navValue,
-                  mutation_at: Date.now(),
-                }
-                if (amount != null) {
-                  body.amount_for_shares = amount
-                  body.shares_issued = amount / navValue!
-                }
-                return fetch("/api/fund-mutations", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify(body),
-                })
-              })
-            )
-          }
-        }
-      } catch {
-        // Non-fatal — period is already closed; user can create group manually
-      }
 
       onSuccess()
       onClose()
@@ -1369,26 +1497,29 @@ export function FundNavManager({
   currencyCode?: string
   periodFrequency?: string | null
 }) {
-  const [groups, setGroups] = React.useState<MutationGroup[]>([])
   const [periods, setPeriods] = React.useState<FundPeriod[]>([])
   const [allMutations, setAllMutations] = React.useState<FundMutation[]>([])
   const [shareClasses, setShareClasses] = React.useState<ShareClass[]>([])
+  const [capTableEntries, setCapTableEntries] = React.useState<CapTableEntry[]>([])
   const [loading, setLoading] = React.useState(true)
-  const [newGroupSaving, setNewGroupSaving] = React.useState(false)
+  const [openPeriodDialogOpen, setOpenPeriodDialogOpen] = React.useState(false)
+  const [addMutationOpen, setAddMutationOpen] = React.useState(false)
+  const [deployCall, setDeployCall] = React.useState<{ call: CapitalCall; entry: CapTableEntry } | null>(null)
+  const [subscribeAllOpen, setSubscribeAllOpen] = React.useState(false)
 
   const load = React.useCallback(async () => {
     setLoading(true)
     try {
-      const [groupsRes, periodsRes, mutationsRes, sc] = await Promise.all([
-        fetch(`/api/fund-mutation-groups?entity=${entityUUID}`, { cache: "no-store" }).then((r) => r.ok ? r.json() : []),
+      const [periodsRes, mutationsRes, sc, entries] = await Promise.all([
         fetch(`/api/fund-periods?entity=${entityUUID}`, { cache: "no-store" }).then((r) => r.ok ? r.json() : []),
         fetch(`/api/fund-mutations?entity=${entityUUID}`, { cache: "no-store" }).then((r) => r.ok ? r.json() : []),
         fetchShareClasses(entityUUID),
+        fetchCapTableEntries(entityUUID),
       ])
-      setGroups(groupsRes as MutationGroup[])
       setPeriods((periodsRes as FundPeriod[]).sort((a, b) => (b.opened_at ?? 0) - (a.opened_at ?? 0)))
       setAllMutations(mutationsRes as FundMutation[])
       setShareClasses(sc)
+      setCapTableEntries(entries)
     } finally {
       setLoading(false)
     }
@@ -1396,24 +1527,26 @@ export function FundNavManager({
 
   React.useEffect(() => { void load() }, [load])
 
-  async function handleNewGroup() {
-    setNewGroupSaving(true)
-    try {
-      await fetch("/api/fund-mutation-groups", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entity: entityUUID, status: "draft" }),
-      })
-      await load()
-    } finally {
-      setNewGroupSaving(false)
-    }
-  }
-
   const openPeriod = periods.find((p) => p.status === "open") ?? null
   const closedPeriods = periods.filter((p) => p.status === "closed")
-  const draftGroups = groups.filter((g) => g.status === "draft")
   const lastClosedPeriod = closedPeriods[0] ?? null
+
+  // Flatten undeployed capital calls across all cap table entries
+  const undeployedCalls = React.useMemo(() => {
+    const result: Array<{ call: CapitalCall; entry: CapTableEntry }> = []
+    for (const entry of capTableEntries) {
+      for (const call of entry._capital_call ?? []) {
+        if (call.deployed_at == null) result.push({ call, entry })
+      }
+    }
+    return result
+  }, [capTableEntries])
+
+  // Mutations not yet assigned to any period
+  const pendingMutations = React.useMemo(
+    () => allMutations.filter((m) => !m.period),
+    [allMutations]
+  )
 
   // Group mutations by period id client-side
   const mutsByPeriod = React.useMemo(() => {
@@ -1445,39 +1578,106 @@ export function FundNavManager({
           previousPeriod={lastClosedPeriod}
           periodFrequency={periodFrequency}
           onRefresh={load}
+          onAddMutation={() => setAddMutationOpen(true)}
         />
       )}
 
-      {/* ── Draft mutations ───────────────────────────────────────────────── */}
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-semibold">Draft mutations</h2>
-          <Button size="sm" variant="outline" onClick={handleNewGroup} disabled={newGroupSaving}>
-            {newGroupSaving ? <Spinner className="size-3.5 mr-1" /> : <Plus className="size-3.5 mr-1" />}
-            New draft
+      {/* ── Pending capital calls (undeployed) ───────────────────────────── */}
+      {undeployedCalls.length > 0 && (
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold">Pending capital</h2>
+              <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[11px] font-medium">
+                {undeployedCalls.length}
+              </span>
+            </div>
+            <Button size="sm" variant="outline" onClick={() => setSubscribeAllOpen(true)}>
+              Subscribe all
+            </Button>
+          </div>
+          <div className="rounded-xl border bg-card overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/30 border-b">
+                <tr>
+                  <th className="text-left py-2 px-4 text-xs font-medium text-muted-foreground">Investor</th>
+                  <th className="text-left py-2 px-3 text-xs font-medium text-muted-foreground">Share class</th>
+                  <th className="text-left py-2 px-3 text-xs font-medium text-muted-foreground">Paid</th>
+                  <th className="text-right py-2 px-3 text-xs font-medium text-muted-foreground">Amount</th>
+                  <th className="py-2 px-4" />
+                </tr>
+              </thead>
+              <tbody>
+                {undeployedCalls.map(({ call, entry }) => (
+                  <tr key={call.id} className="border-b last:border-0">
+                    <td className="py-2.5 px-4">
+                      <div className="font-medium">{entry._shareholder?.name ?? "—"}</div>
+                      {entry._shareholder?.email && (
+                        <div className="text-xs text-muted-foreground">{entry._shareholder.email}</div>
+                      )}
+                    </td>
+                    <td className="py-2.5 px-3 text-muted-foreground">{call._share_class?.name ?? "—"}</td>
+                    <td className="py-2.5 px-3 text-muted-foreground">{fmtDate(call.received_at)}</td>
+                    <td className="py-2.5 px-3 text-right tabular-nums font-medium">{fmtCcy(call.amount, currencyCode)}</td>
+                    <td className="py-2.5 px-4 text-right">
+                      <Button size="sm" variant="outline" onClick={() => setDeployCall({ call, entry })}>
+                        Subscribe
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Pending mutations (subscribed, not yet in a period) ───────────── */}
+      {!openPeriod && pendingMutations.length > 0 && (
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold">Pending mutations</h2>
+              <span className="inline-flex items-center rounded-full bg-blue-100 text-blue-700 px-2 py-0.5 text-[11px] font-medium">
+                {pendingMutations.length}
+              </span>
+            </div>
+            <Button size="sm" onClick={() => setOpenPeriodDialogOpen(true)}>
+              <Plus className="size-3.5 mr-1.5" />
+              Open period
+            </Button>
+          </div>
+          <div className="rounded-xl border bg-card overflow-hidden">
+            <MutationRows mutations={pendingMutations} currencyCode={currencyCode} />
+            <div className="flex items-center gap-6 px-4 py-2.5 bg-muted/20 border-t text-xs text-muted-foreground">
+              {(() => {
+                const subs = pendingMutations.filter((m) => m.type === "subscription")
+                const totalIn = subs.reduce((s, m) => s + (m.amount_for_shares ?? 0), 0)
+                const totalShares = subs.reduce((s, m) => s + (m.shares_issued ?? 0), 0)
+                return (
+                  <>
+                    {totalIn > 0 && <span>Total in: <span className="font-medium text-foreground">{fmtCcy(totalIn, currencyCode)}</span></span>}
+                    {totalShares > 0 && <span>Shares: <span className="font-medium text-foreground">{fmt(totalShares, 4)}</span></span>}
+                  </>
+                )
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── No open period, no pending mutations ─────────────────────────── */}
+      {!openPeriod && pendingMutations.length === 0 && undeployedCalls.length === 0 && (
+        <div className="rounded-xl border p-6 flex flex-col items-center gap-3 text-center">
+          <p className="text-sm text-muted-foreground">
+            No open period. Open a new period to start tracking NAV and mutations.
+          </p>
+          <Button size="sm" variant="outline" onClick={() => setOpenPeriodDialogOpen(true)}>
+            <Plus className="size-3.5 mr-1.5" />
+            Open period
           </Button>
         </div>
-
-        {draftGroups.length === 0 ? (
-          <div className="rounded-xl border p-6 text-center">
-            <p className="text-sm text-muted-foreground">
-              No draft mutations. Create a draft to stage subscriptions, redemptions, or distributions before opening a period.
-            </p>
-          </div>
-        ) : (
-          draftGroups.map((g) => (
-            <MutationGroupCard
-              key={g.id}
-              group={g}
-              entityUUID={entityUUID}
-              previousPeriod={lastClosedPeriod}
-              shareClasses={shareClasses}
-              currencyCode={currencyCode}
-              onRefresh={load}
-            />
-          ))
-        )}
-      </div>
+      )}
 
       {/* ── Closed periods ────────────────────────────────────────────────── */}
       {closedPeriods.length > 0 && (
@@ -1496,6 +1696,52 @@ export function FundNavManager({
           ))}
         </div>
       )}
+
+      {/* ── Dialogs ───────────────────────────────────────────────────────── */}
+      <OpenPeriodDialog
+        open={openPeriodDialogOpen}
+        onClose={() => setOpenPeriodDialogOpen(false)}
+        entityUUID={entityUUID}
+        previousPeriod={lastClosedPeriod}
+        pendingMutations={pendingMutations}
+        currencyCode={currencyCode}
+        onSuccess={() => { setOpenPeriodDialogOpen(false); void load() }}
+      />
+
+      {openPeriod && (
+        <AddMutationDialog
+          open={addMutationOpen}
+          onClose={() => setAddMutationOpen(false)}
+          entityUUID={entityUUID}
+          periodId={openPeriod.id}
+          onSuccess={() => { setAddMutationOpen(false); void load() }}
+        />
+      )}
+
+      {deployCall && (
+        <DeployCallDialog
+          open
+          onClose={() => setDeployCall(null)}
+          entityUUID={entityUUID}
+          call={deployCall.call}
+          entry={deployCall.entry}
+          openPeriod={openPeriod}
+          previousPeriod={lastClosedPeriod}
+          currencyCode={currencyCode}
+          onSuccess={() => { setDeployCall(null); void load() }}
+        />
+      )}
+
+      <SubscribeAllDialog
+        open={subscribeAllOpen}
+        onClose={() => setSubscribeAllOpen(false)}
+        entityUUID={entityUUID}
+        calls={undeployedCalls}
+        openPeriod={openPeriod}
+        previousPeriod={lastClosedPeriod}
+        currencyCode={currencyCode}
+        onSuccess={() => { setSubscribeAllOpen(false); void load() }}
+      />
     </div>
   )
 }
