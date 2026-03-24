@@ -21,6 +21,7 @@ export default async function FundCapTablePage({
       fundId={fundId}
       entityUUID={fund.entity}
       amEntityUUID={am?.entity ?? null}
+      amRecordId={amId}
       currencyCode={currencyCode}
     />
   )

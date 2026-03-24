@@ -26,6 +26,7 @@ import type { ShareClass } from "@/lib/cap-table"
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type CurrencyOption = { id: number; name?: string | null; code?: string | null }
+type FundOption = { id: string; name?: string | null; entity?: string | null }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -45,6 +46,7 @@ export function AddFundInvestorDialog({
   fundId,
   fundEntityUUID,
   amEntityUUID,
+  amRecordId,
   shareClasses,
   currencyCode,
   onSuccess,
@@ -54,6 +56,7 @@ export function AddFundInvestorDialog({
   fundId?: string
   fundEntityUUID: string
   amEntityUUID: string | null
+  amRecordId?: string | null
   shareClasses: ShareClass[]
   currencyCode: string
   onSuccess: () => void
@@ -62,6 +65,10 @@ export function AddFundInvestorDialog({
   const [email, setEmail] = React.useState("")
   const [name, setName] = React.useState("")
   const [type, setType] = React.useState<string>("individual")
+
+  // ── Fund-as-investor ──
+  const [amFunds, setAmFunds] = React.useState<FundOption[]>([])
+  const [selectedFundId, setSelectedFundId] = React.useState("")
 
   // ── Investment ──
   const [shareClassId, setShareClassId] = React.useState("")
@@ -95,18 +102,36 @@ export function AddFundInvestorDialog({
       .catch(() => {})
   }, [currencyCode])
 
+  // Load sibling funds when AM is known (for fund-as-investor)
+  // managed_by stores the asset_manager record UUID (amRecordId), not entity UUID
+  React.useEffect(() => {
+    const managedBy = amRecordId ?? amEntityUUID
+    if (!managedBy) return
+    fetch(`/api/funds?managed_by=${managedBy}`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: FundOption[]) => setAmFunds(list.filter((f) => f.entity !== fundEntityUUID)))
+      .catch(() => {})
+  }, [amRecordId, amEntityUUID, fundEntityUUID])
+
   // Reset on open
   React.useEffect(() => {
     if (open) {
-      setEmail(""); setName(""); setType("individual")
+      setEmail(""); setName(""); setType("individual"); setSelectedFundId("")
       setShareClassId(""); setCommittedAmount("")
       setRecordMode("paid"); setSubscriptionDate(new Date()); setCallAmount(""); setEntryFeeRate(""); setMarkDeployed(false)
       setError(null)
-      // Re-derive default currency from loaded list
       const match = currencies.find((c) => c.code === currencyCode)
       setCurrencyId(match?.id ?? null)
     }
   }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-fill name when a sibling fund is selected
+  React.useEffect(() => {
+    if (type === "fund" && selectedFundId) {
+      const f = amFunds.find((f) => f.id === selectedFundId)
+      if (f?.name) setName(f.name)
+    }
+  }, [selectedFundId, type, amFunds])
 
   // Auto-populate entry fee from selected share class fees
   React.useEffect(() => {
@@ -140,6 +165,25 @@ export function AddFundInvestorDialog({
     setError(null)
 
     try {
+      // Fund-as-investor: shareholder record only, no entry or call
+      if (type === "fund") {
+        if (!selectedFundId) { setError("Select the investing fund."); setSaving(false); return }
+        await fetch("/api/cap-table-shareholders", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            entity: fundEntityUUID,
+            name: name.trim(),
+            type: "fund",
+            linked_fund: selectedFundId,
+            role: "investor",
+          }),
+        })
+        onSuccess()
+        onClose()
+        return
+      }
+
       // Paid/bypass mode: single server-side endpoint handles the full chain
       if (recordMode === "paid" && netAmount && amEntityUUID) {
         const entryFee = sc?._share_class_fee?.find((f) => f.type === "entry")
@@ -272,40 +316,73 @@ export function AddFundInvestorDialog({
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Investor</p>
 
               <Field>
-                <FieldLabel htmlFor="fi-email">Email</FieldLabel>
-                <Input
-                  id="fi-email"
-                  type="email"
-                  placeholder="investor@example.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
-              </Field>
-
-              <Field>
-                <FieldLabel htmlFor="fi-name">Full name <span className="text-destructive">*</span></FieldLabel>
-                <Input
-                  id="fi-name"
-                  placeholder="e.g. John Smith or Acme Capital Ltd"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                />
-              </Field>
-
-              <Field>
                 <FieldLabel>Type</FieldLabel>
-                <Select value={type} onValueChange={setType}>
+                <Select value={type} onValueChange={(v) => { setType(v); setSelectedFundId(""); setName("") }}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="individual">Individual</SelectItem>
                     <SelectItem value="company">Company</SelectItem>
+                    <SelectItem value="fund">Fund</SelectItem>
                   </SelectContent>
                 </Select>
               </Field>
+
+              {type === "fund" ? (
+                <>
+                  <Field>
+                    <FieldLabel>Investing fund</FieldLabel>
+                    <Select value={selectedFundId} onValueChange={setSelectedFundId}>
+                      <SelectTrigger><SelectValue placeholder="Select fund…" /></SelectTrigger>
+                      <SelectContent>
+                        {amFunds.map((f) => (
+                          <SelectItem key={f.id} value={f.id}>{f.name ?? f.id}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      The fund&apos;s full value is treated as invested — no capital call is created.
+                    </p>
+                  </Field>
+                  {selectedFundId && (
+                    <Field>
+                      <FieldLabel htmlFor="fi-name">Display name <span className="text-destructive">*</span></FieldLabel>
+                      <Input
+                        id="fi-name"
+                        placeholder="Fund name"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                      />
+                    </Field>
+                  )}
+                </>
+              ) : (
+                <>
+                  <Field>
+                    <FieldLabel htmlFor="fi-email">Email</FieldLabel>
+                    <Input
+                      id="fi-email"
+                      type="email"
+                      placeholder="investor@example.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                    />
+                  </Field>
+
+                  <Field>
+                    <FieldLabel htmlFor="fi-name">Full name <span className="text-destructive">*</span></FieldLabel>
+                    <Input
+                      id="fi-name"
+                      placeholder="e.g. John Smith or Acme Capital Ltd"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                    />
+                  </Field>
+                </>
+              )}
             </section>
 
             {/* ── INVESTMENT ── */}
-            <section className="flex flex-col gap-3">
+            {type !== "fund" && <section className="flex flex-col gap-3">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Investment</p>
 
               <Field>
@@ -358,10 +435,10 @@ export function AddFundInvestorDialog({
                   />
                 </div>
               </Field>
-            </section>
+            </section>}
 
             {/* ── SUBSCRIPTION RECORD ── */}
-            <section className="flex flex-col gap-3">
+            {type !== "fund" && <section className="flex flex-col gap-3">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Subscription record</p>
 
               <DatePickerInput
@@ -496,7 +573,7 @@ export function AddFundInvestorDialog({
                   )}
                 </div>
               )}
-            </section>
+            </section>}
 
             {error && <FieldError>{error}</FieldError>}
           </div>

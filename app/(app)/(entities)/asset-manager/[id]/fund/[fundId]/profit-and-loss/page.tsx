@@ -1,10 +1,22 @@
-export default function FundProfitAndLossPage() {
+import { notFound } from "next/navigation"
+import { getEntityRecord } from "@/lib/entity-page"
+import { FundPnlClient } from "@/components/fund-pnl-client"
+
+export default async function FundProfitAndLossPage({
+  params,
+}: {
+  params: Promise<{ id: string; fundId: string }>
+}) {
+  const { fundId } = await params
+  const fund = await getEntityRecord("fund", fundId)
+  if (!fund) notFound()
+
+  const currencyCode = (fund._currency as { code?: string } | null)?.code ?? "EUR"
+
   return (
-    <div className="p-6 md:p-8">
-      <div className="mx-auto">
-        <h1 className="text-2xl font-semibold tracking-tight">Profit & Loss</h1>
-        <p className="text-sm text-muted-foreground mt-1">Coming soon.</p>
-      </div>
-    </div>
+    <FundPnlClient
+      entityUUID={fund.entity}
+      currencyCode={currencyCode}
+    />
   )
 }

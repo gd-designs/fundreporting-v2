@@ -158,7 +158,12 @@ function buildRows(): RowDef[] {
     },
     {
       kind: "metric", label: "BALANCE:  Total Assets Under Management end of period",
-      getPeriod: (p, code) => fmtCcy(p.total_aum_end, code),
+      getPeriod: (p, code) => {
+        if (p.total_invested_assets != null && p.total_debt != null) {
+          return fmtCcy(p.total_invested_assets - p.total_debt - (p.pnl_costs ?? 0), code)
+        }
+        return fmtCcy(p.total_aum_end, code)
+      },
     },
 
     // ── Step C (period col only) ──────────────────────────────────────────────

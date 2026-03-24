@@ -8,9 +8,11 @@ import { TableProperties, Settings2 } from "lucide-react"
 export function FundNavPageClient({
   entityUUID,
   currencyCode,
+  periodFrequency,
 }: {
   entityUUID: string
   currencyCode: string
+  periodFrequency: string | null
 }) {
   const [view, setView] = React.useState<"manage" | "sheet">("manage")
 
@@ -45,7 +47,7 @@ export function FundNavPageClient({
       </div>
 
       {view === "manage" ? (
-        <FundNavManager entityUUID={entityUUID} currencyCode={currencyCode} />
+        <FundNavManager entityUUID={entityUUID} currencyCode={currencyCode} periodFrequency={periodFrequency} />
       ) : (
         <FundNavSheet entityUUID={entityUUID} currencyCode={currencyCode} />
       )}

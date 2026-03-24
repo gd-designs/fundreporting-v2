@@ -12,6 +12,7 @@ export type ShareClassFee = {
   high_water_mark?: boolean | null
   catch_up_rate?: number | null
   fixed_amount?: number | null
+  rate_is_annual?: boolean | null
   notes?: string | null
   created_at?: number | null
 }
@@ -51,7 +52,8 @@ export type CapTableShareholder = {
   id: string
   entity: string
   name: string | null
-  type: "individual" | "company" | null
+  type: "individual" | "company" | "fund" | null
+  linked_fund?: string | null
   role: "ubo" | "stakeholder" | "investor" | null
   is_ubo: boolean | null
   ubo_percentage: number | null

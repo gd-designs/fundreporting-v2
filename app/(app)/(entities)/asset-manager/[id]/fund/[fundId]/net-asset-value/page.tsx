@@ -14,6 +14,7 @@ async function getFund(id: string) {
     id: string
     entity: string
     name?: string | null
+    period_frequency?: string | null
     _currency?: { code?: string | null } | null
   }>
 }
@@ -42,6 +43,7 @@ export default async function FundNavPage({
         <FundNavPageClient
           entityUUID={fund.entity}
           currencyCode={currencyCode}
+          periodFrequency={fund.period_frequency ?? null}
         />
       </div>
     </div>
