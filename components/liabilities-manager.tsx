@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Trash2 } from "lucide-react"
+import { Trash2, CheckCircle2 } from "lucide-react"
 import { useRouter, usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { fetchEntityLiabilities, type Liability } from "@/lib/liabilities"
@@ -13,6 +13,24 @@ import { computeAll, type PaymentScheme } from "@/lib/amortization"
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 type PaidInfo = { count: number; lastDate: number | null }
+
+type FundPayout = {
+  id: string
+  entity?: string | null
+  fund_mutation?: string | null
+  cap_table_entry?: string | null
+  type?: "distribution" | "redemption" | null
+  amount?: number | null
+  nav_at_declaration?: number | null
+  status?: "pending" | "paid" | null
+  declared_at?: number | null
+  paid_at?: number | null
+  notes?: string | null
+  _cap_table_entry?: {
+    id: string
+    _shareholder?: { id: string; name?: string | null; email?: string | null } | null
+  } | null
+}
 
 function getOutstanding(l: Liability, paidCount: number): number {
   const p = l.loan_amount ?? 0
@@ -42,9 +60,191 @@ function formatDate(ms: number | null | undefined): string {
   }).format(new Date(ms))
 }
 
+const PAYOUT_TYPE_LABEL: Record<string, string> = {
+  distribution: "Distribution",
+  redemption: "Redemption",
+}
+
+const PAYOUT_TYPE_COLOR: Record<string, string> = {
+  distribution: "bg-blue-100 text-blue-700",
+  redemption: "bg-red-100 text-red-700",
+}
+
+// ── Pending Payouts Section ───────────────────────────────────────────────────
+
+function PendingPayoutsSection({
+  entityUUID,
+  currencyCode,
+  onTotalChange,
+}: {
+  entityUUID: string
+  currencyCode: string | null
+  onTotalChange: (total: number) => void
+}) {
+  const [payouts, setPayouts] = React.useState<FundPayout[]>([])
+  const [loading, setLoading] = React.useState(true)
+  const [markingId, setMarkingId] = React.useState<string | null>(null)
+  const [confirmId, setConfirmId] = React.useState<string | null>(null)
+
+  const load = React.useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await fetch(`/api/fund-payouts?entity=${entityUUID}&status=pending`, { cache: "no-store" })
+      const data: FundPayout[] = res.ok ? await res.json() : []
+      setPayouts(data)
+      onTotalChange(data.reduce((s, p) => s + (p.amount ?? 0), 0))
+    } catch {
+      onTotalChange(0)
+    } finally {
+      setLoading(false)
+    }
+  }, [entityUUID]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  React.useEffect(() => { void load() }, [load])
+
+  async function markPaid(id: string) {
+    setMarkingId(id)
+    try {
+      await fetch(`/api/fund-payouts/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "paid", paid_at: Date.now() }),
+      })
+      await load()
+    } finally {
+      setMarkingId(null)
+      setConfirmId(null)
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="rounded-lg border">
+        <div className="px-4 py-3 border-b flex items-center gap-2">
+          <p className="font-semibold text-sm">Pending Payouts</p>
+        </div>
+        <div className="px-4 py-8 text-center text-sm text-muted-foreground">Loading…</div>
+      </div>
+    )
+  }
+
+  if (payouts.length === 0) return null
+
+  const total = payouts.reduce((s, p) => s + (p.amount ?? 0), 0)
+
+  return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50/30">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-amber-200">
+        <div className="flex items-center gap-2">
+          <p className="font-semibold text-sm">Pending Payouts</p>
+          <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[11px] font-medium">
+            {payouts.length}
+          </span>
+        </div>
+        <span className="text-sm font-semibold text-red-500 tabular-nums">
+          {formatAmountWithCurrency(total, currencyCode)}
+        </span>
+      </div>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b bg-amber-50/60">
+            <th className="px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Investor</th>
+            <th className="px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Type</th>
+            <th className="px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Declared</th>
+            <th className="px-4 py-2 text-right text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Amount</th>
+            <th className="px-4 py-2" />
+          </tr>
+        </thead>
+        <tbody className="divide-y">
+          {payouts.map((p) => {
+            const isConfirming = confirmId === p.id
+            const isMarking = markingId === p.id
+            const typeKey = p.type ?? ""
+            return (
+              <tr key={p.id} className="hover:bg-amber-50/40">
+                <td className="px-4 py-3">
+                  <div className="font-medium">{p._cap_table_entry?._shareholder?.name ?? "—"}</div>
+                  {p._cap_table_entry?._shareholder?.email && (
+                    <div className="text-xs text-muted-foreground">{p._cap_table_entry._shareholder.email}</div>
+                  )}
+                </td>
+                <td className="px-4 py-3">
+                  {p.type ? (
+                    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${PAYOUT_TYPE_COLOR[typeKey] ?? "bg-muted text-muted-foreground"}`}>
+                      {PAYOUT_TYPE_LABEL[typeKey] ?? p.type}
+                    </span>
+                  ) : "—"}
+                </td>
+                <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
+                  {formatDate(p.declared_at)}
+                </td>
+                <td className="px-4 py-3 text-right tabular-nums font-medium text-red-500">
+                  {p.amount != null ? formatAmountWithCurrency(p.amount, currencyCode) : "—"}
+                </td>
+                <td className="px-4 py-3 text-right">
+                  {isConfirming ? (
+                    <div className="flex items-center justify-end gap-1">
+                      <Button
+                        size="sm"
+                        variant="default"
+                        className="h-6 px-2 text-xs"
+                        disabled={isMarking}
+                        onClick={() => markPaid(p.id)}
+                      >
+                        {isMarking ? "…" : "Confirm paid"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-2 text-xs"
+                        onClick={() => setConfirmId(null)}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 px-2 text-xs gap-1"
+                      onClick={() => setConfirmId(p.id)}
+                    >
+                      <CheckCircle2 className="size-3" />
+                      Mark paid
+                    </Button>
+                  )}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+        <tfoot>
+          <tr className="border-t bg-amber-50/60 font-semibold">
+            <td colSpan={3} className="px-4 py-2 text-[10px] uppercase tracking-wide text-muted-foreground">Total pending</td>
+            <td className="px-4 py-2 text-right tabular-nums text-red-500">
+              {formatAmountWithCurrency(total, currencyCode)}
+            </td>
+            <td />
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  )
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function LiabilitiesManager({ entityUUID, initialLiabilityId, allowNewMoneyIn = false }: { entityUUID: string; initialLiabilityId?: string; allowNewMoneyIn?: boolean }) {
+export function LiabilitiesManager({
+  entityUUID,
+  initialLiabilityId,
+  allowNewMoneyIn = false,
+  showPayouts = false,
+}: {
+  entityUUID: string
+  initialLiabilityId?: string
+  allowNewMoneyIn?: boolean
+  showPayouts?: boolean
+}) {
   const [liabilities, setLiabilities] = React.useState<Liability[]>([])
   const [assetMap, setAssetMap] = React.useState<Map<string, EntityAsset>>(new Map())
   const [paidMap, setPaidMap] = React.useState<Map<string, PaidInfo>>(new Map())
@@ -54,6 +254,7 @@ export function LiabilitiesManager({ entityUUID, initialLiabilityId, allowNewMon
   const [confirmDeleteId, setConfirmDeleteId] = React.useState<string | null>(null)
   const [sheetLiability, setSheetLiability] = React.useState<Liability | null>(null)
   const [sheetDefaultTab, setSheetDefaultTab] = React.useState("overview")
+  const [pendingPayoutsTotal, setPendingPayoutsTotal] = React.useState(0)
   const router = useRouter()
   const pathname = usePathname()
 
@@ -93,7 +294,6 @@ export function LiabilitiesManager({ entityUUID, initialLiabilityId, allowNewMon
         })
       }
       setPaidMap(pm)
-      // Auto-open sheet if initialLiabilityId is provided
       if (initialLiabilityId) {
         const match = libs.find((l) => l.id === initialLiabilityId)
         if (match) setSheetLiability(match)
@@ -121,13 +321,16 @@ export function LiabilitiesManager({ entityUUID, initialLiabilityId, allowNewMon
     }
   }
 
-  // Stats
-  const totalOutstanding = liabilities.reduce((s, l) => {
+  // Loan liabilities outstanding
+  const loanOutstanding = liabilities.reduce((s, l) => {
     const paid = paidMap.get(l.id)
     return s + getOutstanding(l, paid?.count ?? 0)
   }, 0)
 
-  // Cache liabilities value for dashboard entity cards
+  // Total = loans + pending payouts (when showPayouts enabled)
+  const totalOutstanding = loanOutstanding + (showPayouts ? pendingPayoutsTotal : 0)
+
+  // Cache combined total for sidebar / overview
   React.useEffect(() => {
     if (loading) return
     fetch(`/api/entity-stats/${entityUUID}`, {
@@ -135,6 +338,7 @@ export function LiabilitiesManager({ entityUUID, initialLiabilityId, allowNewMon
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ liabilitiesValue: totalOutstanding }),
     }).catch(() => {})
+    window.dispatchEvent(new CustomEvent("liabilities:update", { detail: { entityUUID, value: totalOutstanding } }))
   }, [loading, entityUUID, totalOutstanding]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const avgRate = liabilities.length > 0
@@ -183,6 +387,15 @@ export function LiabilitiesManager({ entityUUID, initialLiabilityId, allowNewMon
           </p>
         </div>
       </div>
+
+      {/* Pending payouts — funds only */}
+      {showPayouts && (
+        <PendingPayoutsSection
+          entityUUID={entityUUID}
+          currencyCode={primaryCurrency}
+          onTotalChange={setPendingPayoutsTotal}
+        />
+      )}
 
       {/* Liabilities list */}
       <div className="rounded-lg border">
@@ -332,7 +545,7 @@ export function LiabilitiesManager({ entityUUID, initialLiabilityId, allowNewMon
               <tr className="border-t bg-muted/30 font-semibold">
                 <td colSpan={3} className="px-4 py-2 text-[10px] uppercase tracking-wide text-muted-foreground">Total outstanding</td>
                 <td className="px-4 py-2 text-right tabular-nums text-red-500">
-                  {formatAmountWithCurrency(totalOutstanding, primaryCurrency)}
+                  {formatAmountWithCurrency(loanOutstanding, primaryCurrency)}
                 </td>
                 <td colSpan={4} />
               </tr>

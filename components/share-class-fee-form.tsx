@@ -36,7 +36,7 @@ export function emptyFee(): FeeRow {
     rate: "",
     rateIsAnnual: true,
     basis: "nav",
-    frequency: "annual",
+    frequency: "annually",
     fixedAmount: "",
     hurdleRate: "",
     highWaterMark: false,
@@ -64,10 +64,13 @@ export const BASIS_LABELS: Record<string, string> = {
 
 export const FREQ_LABELS: Record<string, string> = {
   one_time: "One-time",
+  daily: "Daily",
+  weekly: "Weekly",
   monthly: "Monthly",
   quarterly: "Quarterly",
-  semi_annual: "Semi-annual",
-  annual: "Annual",
+  "bi-annually": "Bi-annually",
+  annually: "Annually",
+  on_close: "On period close",
 }
 
 // ─── Fee form ────────────────────────────────────────────────────────────────

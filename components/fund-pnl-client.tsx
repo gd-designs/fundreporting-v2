@@ -1,17 +1,16 @@
 "use client"
 
 import * as React from "react"
-import { ChevronDown, ChevronRight, TrendingUp, TrendingDown } from "lucide-react"
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { TrendingUp, TrendingDown, BarChart3 } from "lucide-react"
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts"
 import { Spinner } from "@/components/ui/spinner"
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 type FundPeriod = {
   id: string
-  status?: "open" | "closed" | null
   label?: string | null
+  status?: "open" | "closed" | null
   opened_at?: number | null
   closed_at?: number | null
   nav_start?: number | null
@@ -35,16 +34,11 @@ type FundMutation = {
   id: string
   period?: string | null
   type?: "subscription" | "redemption" | "distribution" | null
-  mutation_at?: number | null
-  nav_per_share?: number | null
   amount_invested?: number | null
-  fee_amount?: number | null
-  amount_for_shares?: number | null
-  shares_issued?: number | null
-  shares_redeemed?: number | null
   amount_returned?: number | null
   amount_distributed?: number | null
-  notes?: string | null
+  shares_issued?: number | null
+  shares_redeemed?: number | null
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -61,31 +55,78 @@ function fmtPct(n: number | null | undefined) {
 }
 
 function fmtDate(ts: number | null | undefined) {
-  if (!ts) return "—"
+  if (!ts) return null
   return new Date(ts).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
-}
-
-function fmtNum(n: number | null | undefined, dp = 4) {
-  if (n == null) return "—"
-  return new Intl.NumberFormat("en-GB", { maximumFractionDigits: dp }).format(n)
 }
 
 function periodLabel(p: FundPeriod, idx: number) {
   return p.label ?? `Period ${idx + 1}`
 }
 
-const MUTATION_LABELS: Record<string, string> = { subscription: "Subscription", redemption: "Redemption", distribution: "Distribution" }
-const MUTATION_COLORS: Record<string, string> = {
-  subscription: "bg-emerald-100 text-emerald-700",
-  redemption: "bg-red-100 text-red-700",
-  distribution: "bg-blue-100 text-blue-700",
+/** Gross income = value the fund created before management fees */
+function grossIncome(p: FundPeriod): number | null {
+  if (p.nav_gross_end == null || p.nav_start == null || p.total_shares_start == null) return null
+  return (p.nav_gross_end - p.nav_start) * p.total_shares_start
 }
 
-// ─── Stat Card ───────────────────────────────────────────────────────────────
+/** Net income = value after management fees */
+function netIncome(p: FundPeriod): number | null {
+  if (p.nav_end == null || p.nav_start == null || p.total_shares_start == null) return null
+  return (p.nav_end - p.nav_start) * p.total_shares_start
+}
 
-function StatCard({ label, value, sub, positive }: { label: string; value: string; sub?: string; positive?: boolean | null }) {
+// ─── P&L Statement Line ───────────────────────────────────────────────────────
+
+function StatementLine({
+  label,
+  value,
+  code,
+  indent = false,
+  bold = false,
+  separator = false,
+  colorize = false,
+  muted = false,
+}: {
+  label: string
+  value: number | null
+  code: string
+  indent?: boolean
+  bold?: boolean
+  separator?: boolean
+  colorize?: boolean
+  muted?: boolean
+}) {
+  const formatted = fmtCcy(value, code)
+  const positive = value != null && value >= 0
+  const valueColor = colorize
+    ? value == null ? "text-muted-foreground" : positive ? "text-emerald-600" : "text-red-600"
+    : muted ? "text-muted-foreground" : "text-foreground"
+
   return (
-    <div className="rounded-lg border p-4 flex flex-col gap-1">
+    <div className={`flex items-center justify-between py-2 ${separator ? "border-t mt-1" : "border-b border-border/40"} ${bold ? "font-semibold" : ""}`}>
+      <span className={`text-sm ${indent ? "pl-4 text-muted-foreground" : ""} ${bold ? "text-foreground" : ""}`}>
+        {label}
+      </span>
+      <span className={`text-sm tabular-nums font-medium ${valueColor}`}>
+        {formatted}
+      </span>
+    </div>
+  )
+}
+
+function SectionHeader({ label, color = "bg-slate-700" }: { label: string; color?: string }) {
+  return (
+    <div className={`px-3 py-1 rounded text-[10px] font-bold tracking-widest text-white uppercase mt-4 mb-1 ${color}`}>
+      {label}
+    </div>
+  )
+}
+
+// ─── Summary Card ─────────────────────────────────────────────────────────────
+
+function SummaryCard({ label, value, sub, positive }: { label: string; value: string; sub?: string; positive?: boolean | null }) {
+  return (
+    <div className="rounded-xl border p-4 flex flex-col gap-1 bg-card">
       <p className="text-xs text-muted-foreground">{label}</p>
       <div className="flex items-end gap-2">
         <p className="text-xl font-semibold tabular-nums">{value}</p>
@@ -100,7 +141,7 @@ function StatCard({ label, value, sub, positive }: { label: string; value: strin
   )
 }
 
-// ─── Main Client Component ───────────────────────────────────────────────────
+// ─── Main ─────────────────────────────────────────────────────────────────────
 
 export function FundPnlClient({
   entityUUID,
@@ -112,7 +153,7 @@ export function FundPnlClient({
   const [periods, setPeriods] = React.useState<FundPeriod[]>([])
   const [mutations, setMutations] = React.useState<FundMutation[]>([])
   const [loading, setLoading] = React.useState(true)
-  const [expanded, setExpanded] = React.useState<Set<string>>(new Set())
+  const [selectedPeriodId, setSelectedPeriodId] = React.useState<string | "all">("all")
 
   React.useEffect(() => {
     async function load() {
@@ -126,7 +167,6 @@ export function FundPnlClient({
           pRes.ok ? pRes.json() : [],
           mRes.ok ? mRes.json() : [],
         ])
-        // Sort periods by opened_at ascending
         const sorted = [...(Array.isArray(pData) ? pData : [])].sort(
           (a: FundPeriod, b: FundPeriod) => (a.opened_at ?? 0) - (b.opened_at ?? 0)
         )
@@ -139,14 +179,6 @@ export function FundPnlClient({
     void load()
   }, [entityUUID])
 
-  function toggle(id: string) {
-    setExpanded((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id); else next.add(id)
-      return next
-    })
-  }
-
   if (loading) {
     return (
       <div className="p-6 md:p-8 flex items-center justify-center h-40">
@@ -155,317 +187,407 @@ export function FundPnlClient({
     )
   }
 
-  if (periods.length === 0) {
+  const closedPeriods = periods.filter((p) => p.status === "closed")
+
+  if (closedPeriods.length === 0) {
     return (
-      <div className="p-6 md:p-8">
-        <h1 className="text-2xl font-semibold tracking-tight">Profit &amp; Loss</h1>
-        <p className="text-sm text-muted-foreground mt-2">No periods recorded yet. Open your first period in the NAV Manager.</p>
+      <div className="p-6 md:p-8 flex flex-col gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Profit &amp; Loss</h1>
+          <p className="text-sm text-muted-foreground mt-1">No closed periods yet. Close your first period in the NAV Manager to generate a P&amp;L statement.</p>
+        </div>
+        <div className="rounded-xl border border-dashed p-10 flex flex-col items-center gap-2 text-center text-muted-foreground">
+          <BarChart3 className="size-8 opacity-40" />
+          <p className="text-sm">P&amp;L statement will appear here once periods are closed.</p>
+        </div>
       </div>
     )
   }
 
-  // ── Derived summary stats ──
-  const closedPeriods = periods.filter((p) => p.status === "closed")
-  const latestPeriod = periods[periods.length - 1]
-  const currentNav = latestPeriod?.nav_end ?? latestPeriod?.nav_gross_end
-  const currentShares = latestPeriod?.total_shares_end
-  const currentAum = latestPeriod?.total_aum_end
-  const totalMgmtFees = closedPeriods.reduce((s, p) => s + (p.management_fee_total ?? 0), 0)
-  const totalCosts = closedPeriods.reduce((s, p) => s + (p.pnl_costs ?? 0), 0)
+  // ── Selected period(s) ──────────────────────────────────────────────────────
+  const displayPeriods = selectedPeriodId === "all" ? closedPeriods : closedPeriods.filter((p) => p.id === selectedPeriodId)
 
-  // Compound net return across closed periods
-  const compoundNetReturn = closedPeriods.reduce((acc, p) => {
+  // ── Aggregate across display periods ────────────────────────────────────────
+  const mutsByPeriod = new Map<string, FundMutation[]>()
+  for (const m of mutations) {
+    if (!m.period) continue
+    const arr = mutsByPeriod.get(m.period) ?? []
+    arr.push(m)
+    mutsByPeriod.set(m.period, arr)
+  }
+
+  // Aggregate P&L line items
+  let aggGrossIncome = 0
+  let aggMgmtFees = 0
+  let aggPnlCosts = 0
+  let aggNetIncome = 0
+  let allNull = true
+
+  for (const p of displayPeriods) {
+    const gi = grossIncome(p)
+    const ni = netIncome(p)
+    if (gi != null) { aggGrossIncome += gi; allNull = false }
+    if (ni != null) { aggNetIncome += ni; allNull = false }
+    aggMgmtFees += p.management_fee_total ?? 0
+    aggPnlCosts += p.pnl_costs ?? 0
+  }
+
+  const aggGrossProfit = aggGrossIncome // No COGS tracked yet
+  const aggOperatingExpenses = aggMgmtFees + aggPnlCosts
+  const aggOperatingIncome = aggGrossProfit - aggOperatingExpenses
+
+  // Mutations aggregate for context
+  const aggSubs = displayPeriods.reduce((s, p) => {
+    return s + (mutsByPeriod.get(p.id) ?? [])
+      .filter((m) => m.type === "subscription")
+      .reduce((ms, m) => ms + (m.amount_invested ?? 0), 0)
+  }, 0)
+  const aggRedems = displayPeriods.reduce((s, p) => {
+    return s + (mutsByPeriod.get(p.id) ?? [])
+      .filter((m) => m.type === "redemption")
+      .reduce((ms, m) => ms + (m.amount_returned ?? 0), 0)
+  }, 0)
+  const aggDists = displayPeriods.reduce((s, p) => {
+    return s + (mutsByPeriod.get(p.id) ?? [])
+      .filter((m) => m.type === "distribution")
+      .reduce((ms, m) => ms + (m.amount_distributed ?? 0), 0)
+  }, 0)
+
+  // Compound return across display periods
+  const compoundReturn = displayPeriods.reduce((acc, p) => {
     if (p.yield_net == null) return acc
     return acc * (1 + p.yield_net)
   }, 1) - 1
 
-  // NAV chart data — one point per period
-  const chartData = periods.map((p, i) => ({
-    name: periodLabel(p, i),
-    navPerShare: p.nav_end ?? p.nav_gross_end ?? null,
-    aum: p.total_aum_end ?? null,
-  }))
-
-  // Mutations indexed by period
-  const mutsByPeriod = new Map<string, FundMutation[]>()
-  for (const m of mutations) {
-    if (!m.period) continue
-    if (!mutsByPeriod.has(m.period)) mutsByPeriod.set(m.period, [])
-    mutsByPeriod.get(m.period)!.push(m)
-  }
+  // ── Chart data ───────────────────────────────────────────────────────────────
+  const chartData = closedPeriods.map((p, i) => {
+    const gi = grossIncome(p)
+    const ni = netIncome(p)
+    return {
+      name: periodLabel(p, i),
+      "Gross income": gi != null ? Math.round(gi) : null,
+      "Net income": ni != null ? Math.round(ni) : null,
+      "Operating expenses": -(p.management_fee_total ?? 0) - (p.pnl_costs ?? 0),
+    }
+  })
 
   return (
     <div className="p-6 md:p-8 flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Profit &amp; Loss</h1>
-        <p className="text-sm text-muted-foreground mt-1">{closedPeriods.length} closed period{closedPeriods.length !== 1 ? "s" : ""}</p>
+      {/* ── Page header ── */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Profit &amp; Loss</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            {closedPeriods.length} closed period{closedPeriods.length !== 1 ? "s" : ""}
+          </p>
+        </div>
+
+        {/* Period selector */}
+        <select
+          value={selectedPeriodId}
+          onChange={(e) => setSelectedPeriodId(e.target.value)}
+          className="rounded-lg border bg-background px-3 py-1.5 text-sm"
+        >
+          <option value="all">All periods</option>
+          {closedPeriods.map((p, i) => (
+            <option key={p.id} value={p.id}>{periodLabel(p, i)}</option>
+          ))}
+        </select>
       </div>
 
-      {/* ── Summary stat cards ── */}
+      {/* ── Summary cards ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard
-          label="NAV / share"
-          value={currentNav != null ? fmtCcy(currentNav, currencyCode) : "—"}
-          sub={currentShares != null ? `${fmtNum(currentShares, 0)} shares` : undefined}
+        <SummaryCard
+          label="Gross income"
+          value={allNull ? "—" : fmtCcy(aggGrossIncome, currencyCode)}
+          sub="Portfolio value appreciation"
+          positive={!allNull ? aggGrossIncome >= 0 : null}
         />
-        <StatCard
-          label="Total AUM"
-          value={fmtCcy(currentAum, currencyCode)}
-          sub={latestPeriod?.status === "open" ? "Current period (open)" : "At last period close"}
+        <SummaryCard
+          label="Operating expenses"
+          value={fmtCcy(aggOperatingExpenses, currencyCode)}
+          sub={aggMgmtFees > 0 ? `${fmtCcy(aggMgmtFees, currencyCode)} mgmt fees` : undefined}
+          positive={false}
         />
-        <StatCard
-          label="Cumulative net return"
-          value={closedPeriods.length > 0 ? fmtPct(compoundNetReturn) : "—"}
-          positive={closedPeriods.length > 0 ? compoundNetReturn >= 0 : null}
-          sub={`Across ${closedPeriods.length} period${closedPeriods.length !== 1 ? "s" : ""}`}
+        <SummaryCard
+          label="Net income"
+          value={allNull ? "—" : fmtCcy(aggNetIncome, currencyCode)}
+          sub={`Net return: ${fmtPct(compoundReturn)}`}
+          positive={!allNull ? aggNetIncome >= 0 : null}
         />
-        <StatCard
-          label="Total costs & fees"
-          value={fmtCcy(totalMgmtFees + totalCosts, currencyCode)}
-          sub={totalMgmtFees > 0 ? `${fmtCcy(totalMgmtFees, currencyCode)} mgmt fees` : undefined}
+        <SummaryCard
+          label="Distributions paid"
+          value={aggDists > 0 ? fmtCcy(aggDists, currencyCode) : "—"}
+          sub={aggSubs > 0 ? `${fmtCcy(aggSubs, currencyCode)} subscribed` : undefined}
         />
       </div>
 
-      {/* ── NAV chart ── */}
-      {chartData.some((d) => d.navPerShare != null) && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">NAV per share</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={200}>
-              <LineChart data={chartData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                <YAxis
-                  tick={{ fontSize: 11 }}
-                  tickFormatter={(v) => fmtCcy(v, currencyCode)}
-                  width={72}
-                />
-                <Tooltip
-                  formatter={(v: number) => [fmtCcy(v, currencyCode), "NAV/share"]}
-                  contentStyle={{ fontSize: 12 }}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="navPerShare"
-                  stroke="hsl(var(--primary))"
-                  strokeWidth={2}
-                  dot={{ r: 4, fill: "hsl(var(--primary))" }}
-                  connectNulls
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      )}
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
 
-      {/* ── Period breakdown table ── */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">Period breakdown</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b text-xs text-muted-foreground">
-                <th className="w-6 py-2 px-3"></th>
-                <th className="text-left py-2 px-3 font-medium">Period</th>
-                <th className="text-right py-2 px-3 font-medium">AUM start</th>
-                <th className="text-right py-2 px-3 font-medium">AUM end</th>
-                <th className="text-right py-2 px-3 font-medium">Gross return</th>
-                <th className="text-right py-2 px-3 font-medium">Mgmt fees</th>
-                <th className="text-right py-2 px-3 font-medium">Costs</th>
-                <th className="text-right py-2 px-3 font-medium">Net return</th>
-                <th className="text-right py-2 px-3 font-medium">NAV/share end</th>
-              </tr>
-            </thead>
-            <tbody>
-              {periods.map((period, idx) => {
-                const isOpen = period.status === "open"
-                const isExpanded = expanded.has(period.id)
-                const periodMuts = mutsByPeriod.get(period.id) ?? []
-                const subsTotal = periodMuts
-                  .filter((m) => m.type === "subscription")
-                  .reduce((s, m) => s + (m.amount_invested ?? 0), 0)
-                const redemptionsTotal = periodMuts
-                  .filter((m) => m.type === "redemption")
-                  .reduce((s, m) => s + (m.amount_returned ?? 0), 0)
-                const distTotal = periodMuts
-                  .filter((m) => m.type === "distribution")
-                  .reduce((s, m) => s + (m.amount_distributed ?? 0), 0)
-                const navEnd = period.nav_end ?? period.nav_gross_end
+        {/* ── P&L Statement ── */}
+        <div className="rounded-xl border bg-card">
+          <div className="px-5 py-4 border-b">
+            <p className="font-semibold text-sm">Profit &amp; Loss Statement</p>
+            {selectedPeriodId !== "all" && (() => {
+              const p = closedPeriods.find((x) => x.id === selectedPeriodId)
+              if (!p) return null
+              const from = fmtDate(p.opened_at)
+              const to = fmtDate(p.closed_at)
+              return <p className="text-xs text-muted-foreground mt-0.5">{from}{to ? ` → ${to}` : ""}</p>
+            })()}
+          </div>
 
-                return (
-                  <React.Fragment key={period.id}>
-                    <tr
-                      className="border-b hover:bg-muted/30 cursor-pointer"
-                      onClick={() => toggle(period.id)}
-                    >
-                      <td className="py-3 px-3 text-muted-foreground">
-                        {isExpanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-                      </td>
-                      <td className="py-3 px-3">
-                        <div className="font-medium flex items-center gap-2">
-                          {periodLabel(period, idx)}
-                          <span className={`text-[10px] font-medium rounded-full px-1.5 py-0.5 ${isOpen ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
-                            {isOpen ? "Open" : "Closed"}
-                          </span>
-                        </div>
-                        <div className="text-xs text-muted-foreground mt-0.5">
-                          {fmtDate(period.opened_at)}{period.closed_at ? ` → ${fmtDate(period.closed_at)}` : ""}
-                        </div>
-                      </td>
-                      <td className="py-3 px-3 text-right tabular-nums text-muted-foreground">{fmtCcy(period.total_aum_start, currencyCode)}</td>
-                      <td className="py-3 px-3 text-right tabular-nums">{fmtCcy(period.total_aum_end, currencyCode)}</td>
-                      <td className={`py-3 px-3 text-right tabular-nums font-medium ${period.yield_gross != null ? (period.yield_gross >= 0 ? "text-emerald-600" : "text-red-600") : ""}`}>
-                        {fmtPct(period.yield_gross)}
-                      </td>
-                      <td className="py-3 px-3 text-right tabular-nums text-muted-foreground">
-                        {period.management_fee_total != null ? fmtCcy(period.management_fee_total, currencyCode) : "—"}
-                      </td>
-                      <td className="py-3 px-3 text-right tabular-nums text-muted-foreground">
-                        {period.pnl_costs != null ? fmtCcy(period.pnl_costs, currencyCode) : "—"}
-                      </td>
-                      <td className={`py-3 px-3 text-right tabular-nums font-medium ${period.yield_net != null ? (period.yield_net >= 0 ? "text-emerald-600" : "text-red-600") : ""}`}>
-                        {fmtPct(period.yield_net)}
-                      </td>
-                      <td className="py-3 px-3 text-right tabular-nums font-medium">{fmtCcy(navEnd, currencyCode)}</td>
-                    </tr>
+          <div className="px-5 py-4">
+            {/* ── INCOME ── */}
+            <SectionHeader label="Income" color="bg-emerald-700" />
 
-                    {isExpanded && (
-                      <tr className="border-b bg-muted/5">
-                        <td></td>
-                        <td colSpan={8} className="py-3 px-3">
-                          <div className="flex flex-col gap-3">
+            <StatementLine
+              label="Portfolio income (value appreciation)"
+              value={allNull ? null : aggGrossIncome}
+              code={currencyCode}
+              indent
+              colorize
+            />
+            <StatementLine
+              label="Other income"
+              value={null}
+              code={currencyCode}
+              indent
+              muted
+            />
 
-                            {/* Period detail grid */}
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                              {[
-                                { label: "NAV start", value: fmtCcy(period.nav_start, currencyCode) },
-                                { label: "NAV end (gross)", value: fmtCcy(period.nav_gross_end, currencyCode) },
-                                { label: "NAV end (net)", value: fmtCcy(period.nav_end, currencyCode) },
-                                { label: "Shares start", value: fmtNum(period.total_shares_start) },
-                                { label: "Shares end", value: fmtNum(period.total_shares_end) },
-                                { label: "Invested assets", value: fmtCcy(period.total_invested_assets, currencyCode) },
-                                { label: "Total debt", value: fmtCcy(period.total_debt, currencyCode) },
-                                { label: "Mgmt fee/share", value: period.management_fee_per_share != null ? fmtCcy(period.management_fee_per_share, currencyCode) : "—" },
-                              ].map((item) => (
-                                <div key={item.label} className="rounded-md bg-muted/40 px-3 py-2">
-                                  <p className="text-[11px] text-muted-foreground">{item.label}</p>
-                                  <p className="text-sm font-medium tabular-nums mt-0.5">{item.value}</p>
-                                </div>
-                              ))}
-                            </div>
+            <StatementLine
+              label="Gross Revenue"
+              value={allNull ? null : aggGrossIncome}
+              code={currencyCode}
+              bold
+              separator
+              colorize
+            />
 
-                            {/* Capital flows */}
-                            {periodMuts.length > 0 && (
-                              <div>
-                                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Capital flows</p>
-                                <div className="flex flex-wrap gap-3 mb-2">
-                                  {subsTotal > 0 && (
-                                    <div className="text-xs rounded-md bg-emerald-50 border border-emerald-200 px-3 py-1.5">
-                                      <span className="text-muted-foreground">Subscriptions </span>
-                                      <span className="font-semibold text-emerald-700">{fmtCcy(subsTotal, currencyCode)}</span>
-                                    </div>
-                                  )}
-                                  {redemptionsTotal > 0 && (
-                                    <div className="text-xs rounded-md bg-red-50 border border-red-200 px-3 py-1.5">
-                                      <span className="text-muted-foreground">Redemptions </span>
-                                      <span className="font-semibold text-red-700">{fmtCcy(redemptionsTotal, currencyCode)}</span>
-                                    </div>
-                                  )}
-                                  {distTotal > 0 && (
-                                    <div className="text-xs rounded-md bg-blue-50 border border-blue-200 px-3 py-1.5">
-                                      <span className="text-muted-foreground">Distributions </span>
-                                      <span className="font-semibold text-blue-700">{fmtCcy(distTotal, currencyCode)}</span>
-                                    </div>
-                                  )}
-                                </div>
-                                <table className="w-full text-xs border rounded-lg overflow-hidden">
-                                  <thead>
-                                    <tr className="border-b bg-muted/30 text-muted-foreground">
-                                      <th className="text-left py-1.5 px-3 font-medium">Type</th>
-                                      <th className="text-left py-1.5 px-3 font-medium">Date</th>
-                                      <th className="text-right py-1.5 px-3 font-medium">Amount</th>
-                                      <th className="text-right py-1.5 px-3 font-medium">Shares</th>
-                                      <th className="text-right py-1.5 px-3 font-medium">NAV/share</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {periodMuts.map((m) => (
-                                      <tr key={m.id} className="border-b last:border-0">
-                                        <td className="py-1.5 px-3">
-                                          <span className={`rounded-full px-1.5 py-0.5 font-medium text-[10px] ${MUTATION_COLORS[m.type ?? ""] ?? "bg-slate-100 text-slate-600"}`}>
-                                            {MUTATION_LABELS[m.type ?? ""] ?? m.type}
-                                          </span>
-                                        </td>
-                                        <td className="py-1.5 px-3 text-muted-foreground">{fmtDate(m.mutation_at)}</td>
-                                        <td className="py-1.5 px-3 text-right tabular-nums">
-                                          {m.type === "subscription" && fmtCcy(m.amount_invested, currencyCode)}
-                                          {m.type === "redemption" && fmtCcy(m.amount_returned, currencyCode)}
-                                          {m.type === "distribution" && fmtCcy(m.amount_distributed, currencyCode)}
-                                        </td>
-                                        <td className="py-1.5 px-3 text-right tabular-nums text-muted-foreground">
-                                          {m.type === "subscription" && fmtNum(m.shares_issued)}
-                                          {m.type === "redemption" && fmtNum(m.shares_redeemed)}
-                                          {m.type === "distribution" && "—"}
-                                        </td>
-                                        <td className="py-1.5 px-3 text-right tabular-nums text-muted-foreground">
-                                          {fmtCcy(m.nav_per_share, currencyCode)}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            )}
+            {/* ── COST OF INCOME ── */}
+            <SectionHeader label="Cost of Income" color="bg-orange-700" />
 
-                            {periodMuts.length === 0 && (
-                              <p className="text-xs text-muted-foreground">No capital flows in this period.</p>
-                            )}
+            <StatementLine
+              label="Direct asset costs"
+              value={null}
+              code={currencyCode}
+              indent
+              muted
+            />
 
-                            {period.notes && (
-                              <p className="text-xs text-muted-foreground border-l-2 pl-3 italic">{period.notes}</p>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
-                )
-              })}
-            </tbody>
-            {closedPeriods.length > 1 && (
-              <tfoot>
-                <tr className="border-t text-xs font-medium bg-muted/10">
-                  <td></td>
-                  <td className="py-2 px-3 text-muted-foreground">Totals / cumulative</td>
-                  <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">
-                    {fmtCcy(periods[0]?.total_aum_start, currencyCode)}
-                  </td>
-                  <td className="py-2 px-3 text-right tabular-nums">
-                    {fmtCcy(latestPeriod?.total_aum_end, currencyCode)}
-                  </td>
-                  <td className="py-2 px-3"></td>
-                  <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">
-                    {fmtCcy(totalMgmtFees, currencyCode)}
-                  </td>
-                  <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">
-                    {fmtCcy(totalCosts, currencyCode)}
-                  </td>
-                  <td className={`py-2 px-3 text-right tabular-nums font-semibold ${compoundNetReturn >= 0 ? "text-emerald-600" : "text-red-600"}`}>
-                    {closedPeriods.length > 0 ? fmtPct(compoundNetReturn) : "—"}
-                  </td>
-                  <td className="py-2 px-3 text-right tabular-nums">
-                    {fmtCcy(latestPeriod?.nav_end ?? latestPeriod?.nav_gross_end, currencyCode)}
-                  </td>
-                </tr>
-              </tfoot>
+            <StatementLine
+              label="Cost of Income"
+              value={0}
+              code={currencyCode}
+              bold
+              separator
+              muted
+            />
+
+            {/* ── GROSS PROFIT ── */}
+            <StatementLine
+              label="Gross Profit"
+              value={allNull ? null : aggGrossProfit}
+              code={currencyCode}
+              bold
+              separator
+              colorize
+            />
+
+            {/* ── OPERATING EXPENSES ── */}
+            <SectionHeader label="Operating Expenses" color="bg-red-700" />
+
+            <StatementLine
+              label="Management fees"
+              value={aggMgmtFees > 0 ? -aggMgmtFees : null}
+              code={currencyCode}
+              indent
+              colorize
+            />
+            <StatementLine
+              label="Fund costs &amp; expenses"
+              value={aggPnlCosts > 0 ? -aggPnlCosts : null}
+              code={currencyCode}
+              indent
+              colorize
+            />
+            <StatementLine
+              label="Personnel &amp; other costs"
+              value={null}
+              code={currencyCode}
+              indent
+              muted
+            />
+
+            <StatementLine
+              label="Total Operating Expenses"
+              value={aggOperatingExpenses > 0 ? -aggOperatingExpenses : null}
+              code={currencyCode}
+              bold
+              separator
+              colorize
+            />
+
+            {/* ── OPERATING INCOME ── */}
+            <StatementLine
+              label="Operating Income"
+              value={allNull ? null : aggOperatingIncome}
+              code={currencyCode}
+              bold
+              separator
+              colorize
+            />
+
+            {/* ── FINANCIAL INCOME & EXPENSES ── */}
+            <SectionHeader label="Financial Income &amp; Expenses" color="bg-blue-700" />
+
+            <StatementLine
+              label="Interest income"
+              value={null}
+              code={currencyCode}
+              indent
+              muted
+            />
+            <StatementLine
+              label="Interest expense"
+              value={null}
+              code={currencyCode}
+              indent
+              muted
+            />
+
+            <StatementLine
+              label="Net Financial Items"
+              value={null}
+              code={currencyCode}
+              bold
+              separator
+              muted
+            />
+
+            {/* ── NET INCOME ── */}
+            <div className="mt-3 pt-3 border-t-2 border-foreground/20 flex items-center justify-between">
+              <span className="font-bold text-base">Net Income</span>
+              <span className={`font-bold text-base tabular-nums ${!allNull ? (aggNetIncome >= 0 ? "text-emerald-600" : "text-red-600") : "text-muted-foreground"}`}>
+                {allNull ? "—" : fmtCcy(aggNetIncome, currencyCode)}
+              </span>
+            </div>
+
+            {/* ── Capital flows note ── */}
+            {(aggSubs > 0 || aggRedems > 0 || aggDists > 0) && (
+              <div className="mt-5 pt-4 border-t border-dashed flex flex-col gap-1.5">
+                <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Capital flows (not income)</p>
+                {aggSubs > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Subscriptions received</span>
+                    <span className="tabular-nums text-emerald-600 font-medium">{fmtCcy(aggSubs, currencyCode)}</span>
+                  </div>
+                )}
+                {aggRedems > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Redemptions paid</span>
+                    <span className="tabular-nums text-red-600 font-medium">−{fmtCcy(aggRedems, currencyCode)}</span>
+                  </div>
+                )}
+                {aggDists > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Distributions paid</span>
+                    <span className="tabular-nums text-red-600 font-medium">−{fmtCcy(aggDists, currencyCode)}</span>
+                  </div>
+                )}
+              </div>
             )}
-          </table>
-        </CardContent>
-      </Card>
+          </div>
+        </div>
+
+        {/* ── Right panel: chart + period breakdown ── */}
+        <div className="flex flex-col gap-4">
+
+          {/* Income chart */}
+          {chartData.some((d) => d["Gross income"] != null) && (
+            <div className="rounded-xl border bg-card p-4">
+              <p className="text-sm font-semibold mb-3">Income by period</p>
+              <ResponsiveContainer width="100%" height={180}>
+                <BarChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => fmtCcy(v, currencyCode)} width={64} />
+                  <Tooltip
+                    formatter={(v: number, name: string) => [fmtCcy(v, currencyCode), name]}
+                    contentStyle={{ fontSize: 11 }}
+                  />
+                  <ReferenceLine y={0} stroke="hsl(var(--border))" />
+                  <Bar dataKey="Gross income" fill="hsl(142 76% 36%)" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="Net income" fill="hsl(221 83% 53%)" radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* Period summary table */}
+          <div className="rounded-xl border bg-card overflow-hidden">
+            <div className="px-4 py-3 border-b">
+              <p className="text-sm font-semibold">By period</p>
+            </div>
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b bg-muted/40 text-muted-foreground">
+                  <th className="text-left px-4 py-2 font-medium">Period</th>
+                  <th className="text-right px-4 py-2 font-medium">Gross</th>
+                  <th className="text-right px-4 py-2 font-medium">Fees</th>
+                  <th className="text-right px-4 py-2 font-medium">Net</th>
+                </tr>
+              </thead>
+              <tbody>
+                {closedPeriods.map((p, i) => {
+                  const gi = grossIncome(p)
+                  const ni = netIncome(p)
+                  return (
+                    <tr
+                      key={p.id}
+                      className={`border-b last:border-0 cursor-pointer hover:bg-muted/30 transition-colors ${selectedPeriodId === p.id ? "bg-primary/5" : ""}`}
+                      onClick={() => setSelectedPeriodId(selectedPeriodId === p.id ? "all" : p.id)}
+                    >
+                      <td className="px-4 py-2.5">
+                        <p className="font-medium text-foreground">{periodLabel(p, i)}</p>
+                        <p className="text-muted-foreground text-[10px]">
+                          {fmtDate(p.opened_at)}{p.closed_at ? ` → ${fmtDate(p.closed_at)}` : ""}
+                        </p>
+                      </td>
+                      <td className={`px-4 py-2.5 text-right tabular-nums font-medium ${gi != null ? (gi >= 0 ? "text-emerald-600" : "text-red-600") : "text-muted-foreground"}`}>
+                        {fmtCcy(gi, currencyCode)}
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">
+                        {fmtCcy(p.management_fee_total, currencyCode)}
+                      </td>
+                      <td className={`px-4 py-2.5 text-right tabular-nums font-medium ${ni != null ? (ni >= 0 ? "text-emerald-600" : "text-red-600") : "text-muted-foreground"}`}>
+                        {fmtCcy(ni, currencyCode)}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+              {closedPeriods.length > 1 && (
+                <tfoot>
+                  <tr className="bg-muted/20 border-t font-semibold">
+                    <td className="px-4 py-2.5 text-muted-foreground">Total</td>
+                    <td className={`px-4 py-2.5 text-right tabular-nums ${aggGrossIncome >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+                      {allNull ? "—" : fmtCcy(aggGrossIncome, currencyCode)}
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">
+                      {fmtCcy(aggMgmtFees, currencyCode)}
+                    </td>
+                    <td className={`px-4 py-2.5 text-right tabular-nums ${aggNetIncome >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+                      {allNull ? "—" : fmtCcy(aggNetIncome, currencyCode)}
+                    </td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

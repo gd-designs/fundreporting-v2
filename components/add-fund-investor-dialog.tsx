@@ -156,7 +156,6 @@ export function AddFundInvestorDialog({
   // feeAmount is additive on top of net; grossWire = what investor actually sends
   const feeAmount = netAmount != null ? netAmount * feeRateDecimal : 0
   const grossWire = netAmount != null ? netAmount + feeAmount : null
-  const sharesIssued = netAmount != null && sc?.current_nav ? netAmount / sc.current_nav : null
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -276,17 +275,10 @@ export function AddFundInvestorDialog({
             amount: netAmount,
             called_at: callTs,
             status: "pending",
+            share_class: shareClassId || null,
           }),
         })
         if (!callRes.ok) throw new Error("Failed to create capital call")
-        const call: { id: string } = await callRes.json()
-        if (shareClassId) {
-          await fetch(`/api/capital-calls/${call.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ share_class: shareClassId }),
-          })
-        }
       }
 
       onSuccess()
@@ -538,19 +530,9 @@ export function AddFundInvestorDialog({
                               <span className="font-semibold tabular-nums">{fmtCcy(grossWire, displayCode)}</span>
                             </div>
                           )}
-                          {sharesIssued != null && sc?.current_nav != null && (
-                            <div className="flex justify-between border-t pt-1 mt-0.5">
-                              <span className="text-muted-foreground">Shares @ {fmtCcy(sc.current_nav, displayCode)}</span>
-                              <span className="font-semibold tabular-nums">
-                                {new Intl.NumberFormat("en-GB", { maximumFractionDigits: 4 }).format(sharesIssued)}
-                              </span>
-                            </div>
-                          )}
-                          {sc && !sc.current_nav && (
-                            <p className="text-amber-600 flex items-center gap-1 mt-0.5">
-                              <AlertCircle className="size-3" /> No NAV set — shares will be calculated at period open
-                            </p>
-                          )}
+                          <p className="text-muted-foreground flex items-center gap-1 mt-0.5">
+                            <AlertCircle className="size-3 text-amber-500" /> Shares issued when subscription mutation is processed at period open
+                          </p>
                         </div>
                       )}
 

@@ -79,6 +79,7 @@ function EditCapitalCallDialog({
   onClose,
   entityUUID,
   call,
+  entryShareClass,
   shareClasses,
   currencyCode,
   onSaved,
@@ -87,6 +88,7 @@ function EditCapitalCallDialog({
   onClose: () => void
   entityUUID: string
   call: CapitalCall | null
+  entryShareClass?: string | null
   shareClasses: ShareClass[]
   currencyCode: string
   onSaved: () => void
@@ -105,7 +107,7 @@ function EditCapitalCallDialog({
       setStatus(call.status ?? "pending")
       setCalledAt(call.called_at ? new Date(call.called_at) : undefined)
       setDueDate(call.due_date ? new Date(call.due_date) : undefined)
-      setShareClass(call.share_class ?? "")
+      setShareClass(call.share_class ?? entryShareClass ?? "")
       setError(null)
     }
   }, [open, call])
@@ -279,7 +281,7 @@ export function FundCapTableView({
   const [loading, setLoading] = React.useState(true)
   // Keys: "sh:{id}" for shareholder rows, "entry:{id}" for entry rows
   const [expandedRows, setExpandedRows] = React.useState<Set<string>>(new Set())
-  const [editDialog, setEditDialog] = React.useState<{ open: boolean; call: CapitalCall | null }>({ open: false, call: null })
+  const [editDialog, setEditDialog] = React.useState<{ open: boolean; call: CapitalCall | null; entryShareClass: string | null }>({ open: false, call: null, entryShareClass: null })
   const [addInvestorOpen, setAddInvestorOpen] = React.useState(false)
   const [addShareClassOpen, setAddShareClassOpen] = React.useState(false)
   const [editShareClass, setEditShareClass] = React.useState<ShareClass | null>(null)
@@ -534,7 +536,7 @@ export function FundCapTableView({
 
                               {/* Capital call rows (visible when entry expanded) */}
                               {entryExpanded && eg.calls.map((cc) => {
-                                const callSc = shareClasses.find((s) => s.id === cc.share_class)
+                                const callSc = shareClasses.find((s) => s.id === (cc.share_class ?? eg.entry.share_class))
                                 const sharesForCall = callSc?.current_nav && cc.amount ? cc.amount / callSc.current_nav : null
                                 const now = Date.now()
                                 const isOverdue = cc.due_date != null && cc.due_date < now && cc.status !== "paid"
@@ -585,7 +587,7 @@ export function FundCapTableView({
                                               </Button>
                                             </DropdownMenuTrigger>
                                             <DropdownMenuContent align="end">
-                                              <DropdownMenuItem onClick={() => setEditDialog({ open: true, call: cc })}>
+                                              <DropdownMenuItem onClick={() => setEditDialog({ open: true, call: cc, entryShareClass: eg.entry.share_class })}>
                                                 <Pencil className="size-3.5 mr-2" /> Edit
                                               </DropdownMenuItem>
                                               {!isLocked && (
@@ -647,9 +649,10 @@ export function FundCapTableView({
 
       <EditCapitalCallDialog
         open={editDialog.open}
-        onClose={() => setEditDialog({ open: false, call: null })}
+        onClose={() => setEditDialog({ open: false, call: null, entryShareClass: null })}
         entityUUID={entityUUID}
         call={editDialog.call}
+        entryShareClass={editDialog.entryShareClass}
         shareClasses={shareClasses}
         currencyCode={currencyCode}
         onSaved={load}

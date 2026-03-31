@@ -49,6 +49,19 @@ export function EditShareClassDialog({
   const [detailsSaving, setDetailsSaving] = React.useState(false)
   const [detailsError, setDetailsError] = React.useState<string | null>(null)
 
+  // ── Distribution tab ──
+  const [existingDists, setExistingDists] = React.useState<import("@/lib/cap-table").ShareClassDistribution[]>([])
+  const [distsLoading, setDistsLoading] = React.useState(false)
+  const [editingDistId, setEditingDistId] = React.useState<string | null>(null)
+  const [distName, setDistName] = React.useState("")
+  const [distBasis, setDistBasis] = React.useState<"nav" | "committed_capital" | "fixed">("nav")
+  const [distRate, setDistRate] = React.useState("")
+  const [distFixedAmount, setDistFixedAmount] = React.useState("")
+  const [distFrequency, setDistFrequency] = React.useState<"monthly" | "quarterly" | "bi-annually" | "annually" | "on_close">("on_close")
+  const [distEnabled, setDistEnabled] = React.useState(true)
+  const [distSaving, setDistSaving] = React.useState(false)
+  const [distError, setDistError] = React.useState<string | null>(null)
+
   // ── Fees tab ──
   const [existingFees, setExistingFees] = React.useState<ShareClassFee[]>([])
   const [feesLoading, setFeesLoading] = React.useState(false)
@@ -82,7 +95,7 @@ export function EditShareClassDialog({
   function resetFeeForm() {
     setEditingFeeId(null)
     setFeeType(""); setFeeBasis("nav"); setFeeRate(""); setFeeRateIsAnnual(true)
-    setFeeFrequency("annual"); setFeeFixedAmount(""); setFeeHurdleRate("")
+    setFeeFrequency("annually"); setFeeFixedAmount(""); setFeeHurdleRate("")
     setFeeHwm(false); setFeeCatchUp("")
   }
 
@@ -97,6 +110,9 @@ export function EditShareClassDialog({
     setLiquidationRank(shareClass.liquidation_rank != null ? String(shareClass.liquidation_rank) : "")
     setNotes(shareClass.notes ?? "")
     setDetailsError(null)
+    resetDistForm()
+    setDistError(null)
+    void loadDists(shareClass.id)
     resetFeeForm()
     setFeesError(null)
     void loadFees(shareClass.id)
@@ -110,6 +126,67 @@ export function EditShareClassDialog({
       if (res.ok) setExistingFees(await res.json())
     } finally {
       setFeesLoading(false)
+    }
+  }
+
+  async function loadDists(id: string) {
+    setDistsLoading(true)
+    try {
+      const res = await fetch(`/api/share-class-distributions?share_class=${id}&entity=${entityUUID}`, { cache: "no-store" })
+      if (res.ok) setExistingDists(await res.json())
+    } finally {
+      setDistsLoading(false)
+    }
+  }
+
+  function resetDistForm() {
+    setEditingDistId(null)
+    setDistName(""); setDistBasis("nav"); setDistRate(""); setDistFixedAmount("")
+    setDistFrequency("on_close"); setDistEnabled(true)
+  }
+
+  function populateDistForm(d: import("@/lib/cap-table").ShareClassDistribution) {
+    setEditingDistId(d.id)
+    setDistName(d.name ?? "")
+    setDistBasis((d.basis as typeof distBasis) ?? "nav")
+    setDistRate(d.rate != null ? String(d.rate) : "")
+    setDistFixedAmount(d.fixed_amount != null ? String(d.fixed_amount) : "")
+    setDistFrequency((d.frequency as typeof distFrequency) ?? "on_close")
+    setDistEnabled(d.enabled ?? true)
+    setDistError(null)
+  }
+
+  async function handleDeleteDist(id: string) {
+    await fetch(`/api/share-class-distributions/${id}`, { method: "DELETE" })
+    setExistingDists((prev) => prev.filter((d) => d.id !== id))
+    onSaved()
+  }
+
+  async function handleSaveDist() {
+    if (!shareClass) return
+    setDistSaving(true); setDistError(null)
+    try {
+      const body = {
+        entity: entityUUID,
+        share_class: shareClass.id,
+        name: distName.trim() || null,
+        basis: distBasis,
+        rate: distBasis !== "fixed" && distRate ? Number(distRate) : null,
+        fixed_amount: distBasis === "fixed" && distFixedAmount ? Number(distFixedAmount) : null,
+        frequency: distFrequency,
+        enabled: distEnabled,
+      }
+      const res = editingDistId
+        ? await fetch(`/api/share-class-distributions/${editingDistId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+        : await fetch("/api/share-class-distributions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })
+      if (!res.ok) throw new Error(await res.text())
+      await loadDists(shareClass.id)
+      resetDistForm()
+      onSaved()
+    } catch (err) {
+      setDistError(err instanceof Error ? err.message : "Failed to save.")
+    } finally {
+      setDistSaving(false)
     }
   }
 
@@ -203,6 +280,7 @@ export function EditShareClassDialog({
         <Tabs defaultValue="details" className="mt-1">
           <TabsList className="w-full">
             <TabsTrigger value="details" className="flex-1">Details</TabsTrigger>
+            <TabsTrigger value="distribution" className="flex-1">Distribution</TabsTrigger>
             <TabsTrigger value="fees" className="flex-1">Fees</TabsTrigger>
           </TabsList>
 
@@ -245,6 +323,111 @@ export function EditShareClassDialog({
                 </Button>
               </DialogFooter>
             </form>
+          </TabsContent>
+
+          {/* ── Distribution ── */}
+          <TabsContent value="distribution">
+            <div className="mt-4 space-y-4">
+              {/* Existing schemes */}
+              {distsLoading ? (
+                <div className="flex justify-center py-4"><Spinner className="size-5" /></div>
+              ) : existingDists.length > 0 ? (
+                <div className="space-y-2">
+                  {existingDists.map((d) => (
+                    <div key={d.id} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                      <div className="flex flex-col gap-0.5">
+                        {d.name && <span className="font-medium">{d.name}</span>}
+                        <span className={d.name ? "text-xs text-muted-foreground" : "font-medium"}>
+                          {d.basis === "fixed"
+                            ? `${d.fixed_amount ?? "—"} fixed per share`
+                            : `${d.rate ?? "—"}% of ${d.basis === "nav" ? "current value (NAV)" : "total investment"}`
+                          }
+                          {" · "}{d.frequency === "on_close" ? "on period close" : d.frequency}
+                          {!d.enabled && " · disabled"}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 text-muted-foreground">
+                        <button type="button" onClick={() => populateDistForm(d)} className="hover:text-foreground"><Pencil className="size-3.5" /></button>
+                        <button type="button" onClick={() => handleDeleteDist(d.id)} className="text-destructive hover:text-destructive/80"><Trash2 className="size-3.5" /></button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">No distribution schemes yet.</p>
+              )}
+
+              {/* Add / edit form */}
+              <div className="rounded-lg border p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    {editingDistId ? "Edit scheme" : "Add scheme"}
+                  </p>
+                  {editingDistId && (
+                    <button type="button" onClick={resetDistForm} className="text-muted-foreground hover:text-foreground"><X className="size-3.5" /></button>
+                  )}
+                </div>
+
+                <Field>
+                  <FieldLabel>Name (optional)</FieldLabel>
+                  <Input placeholder="e.g. Quarterly income" value={distName} onChange={(e) => setDistName(e.target.value)} />
+                </Field>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <Field>
+                    <FieldLabel>Basis</FieldLabel>
+                    <Select value={distBasis} onValueChange={(v) => setDistBasis(v as typeof distBasis)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="nav">% of current value (NAV)</SelectItem>
+                        <SelectItem value="committed_capital">% of total investment</SelectItem>
+                        <SelectItem value="fixed">Fixed amount per share</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel>Frequency</FieldLabel>
+                    <Select value={distFrequency} onValueChange={(v) => setDistFrequency(v as typeof distFrequency)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="monthly">Monthly</SelectItem>
+                        <SelectItem value="quarterly">Quarterly</SelectItem>
+                        <SelectItem value="bi-annually">Bi-annually</SelectItem>
+                        <SelectItem value="annually">Annually</SelectItem>
+                        <SelectItem value="on_close">On period close</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                </div>
+
+                {distBasis === "fixed" ? (
+                  <Field>
+                    <FieldLabel>Fixed amount per share</FieldLabel>
+                    <Input type="number" min="0" step="0.0001" placeholder="e.g. 10.00" value={distFixedAmount} onChange={(e) => setDistFixedAmount(e.target.value)} />
+                  </Field>
+                ) : (
+                  <Field>
+                    <FieldLabel>Rate (%)</FieldLabel>
+                    <Input type="number" min="0" step="0.01" placeholder="e.g. 3.00" value={distRate} onChange={(e) => setDistRate(e.target.value)} />
+                  </Field>
+                )}
+
+                <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                  <Checkbox checked={distEnabled} onCheckedChange={(v) => setDistEnabled(v === true)} />
+                  Active
+                </label>
+
+                {distError && <FieldError>{distError}</FieldError>}
+
+                <Button type="button" size="sm" className="w-full" disabled={distSaving} onClick={handleSaveDist}>
+                  {distSaving ? <Spinner className="size-4" /> : editingDistId ? "Update scheme" : "Save scheme"}
+                </Button>
+              </div>
+
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={onClose}>Done</Button>
+              </DialogFooter>
+            </div>
           </TabsContent>
 
           {/* ── Fees ── */}

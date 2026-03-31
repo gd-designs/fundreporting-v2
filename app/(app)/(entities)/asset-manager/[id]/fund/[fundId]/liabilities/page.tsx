@@ -21,7 +21,7 @@ export default async function FundLiabilitiesPage({
           <h2 className="text-lg font-semibold">Liabilities</h2>
           <p className="text-muted-foreground text-sm mt-0.5">Outstanding liabilities across assets in this fund.</p>
         </div>
-        <LiabilitiesManager entityUUID={record.entity} initialLiabilityId={liability} />
+        <LiabilitiesManager entityUUID={record.entity} initialLiabilityId={liability} showPayouts />
       </div>
     </div>
   )

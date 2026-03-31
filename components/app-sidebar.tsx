@@ -181,9 +181,10 @@ const FUND_IN_AM_ACTIVITY_NAV = [
 ]
 
 function EntityNav({
-  slug, id, entityType, netWorth, currencyCode = "EUR",
+  slug, id, entityType, netWorth, currencyCode = "EUR", assetsValue, liabilitiesValue,
 }: {
   slug: string; id: string; entityType: EntityType; netWorth: number | null; currencyCode?: string
+  assetsValue: number | null; liabilitiesValue: number | null
 }) {
   const pathname = usePathname()
   const base = `/${slug}/${id}`
@@ -195,7 +196,12 @@ function EntityNav({
     return pathname === full || pathname.startsWith(full + "/")
   }
 
-  function NavGroup({ label, items }: { label: string; items: { title: string; href: string; icon: React.ElementType }[] }) {
+  function fmtCompact(v: number | null): string | null {
+    if (v === null) return null
+    return new Intl.NumberFormat("en-GB", { style: "currency", currency: currencyCode, maximumFractionDigits: 1, notation: "compact" }).format(v)
+  }
+
+  function NavGroup({ label, items, values }: { label: string; items: { title: string; href: string; icon: React.ElementType }[]; values?: Record<string, string | null> }) {
     return (
       <SidebarGroup>
         <SidebarGroupLabel>{label}</SidebarGroupLabel>
@@ -204,8 +210,15 @@ function EntityNav({
             <SidebarMenuItem key={item.title}>
               <SidebarMenuButton asChild tooltip={item.title} isActive={isActive(item.href)}>
                 <Link href={`${base}${item.href}`}>
-                  <item.icon />
-                  <span>{item.title}</span>
+                  <item.icon className="shrink-0" />
+                  <div className="flex flex-1 items-center justify-between min-w-0">
+                    <span>{item.title}</span>
+                    {values?.[item.href] != null && (
+                      <span className="text-xs tabular-nums text-muted-foreground group-data-[collapsible=icon]:hidden">
+                        {values[item.href]}
+                      </span>
+                    )}
+                  </div>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
@@ -213,6 +226,11 @@ function EntityNav({
         </SidebarMenu>
       </SidebarGroup>
     )
+  }
+
+  const holdingsValues: Record<string, string | null> = {
+    "/assets": fmtCompact(assetsValue),
+    "/liabilities": fmtCompact(liabilitiesValue),
   }
 
   const overviewLabel = "Overview"
@@ -290,7 +308,7 @@ function EntityNav({
   return (
     <>
       {overviewItem}
-      <NavGroup label="Holdings" items={holdingsNav} />
+      <NavGroup label="Holdings" items={holdingsNav} values={holdingsValues} />
       <SidebarSeparator />
       <NavGroup label="Entries" items={ENTRIES_NAV} />
       <SidebarSeparator />
@@ -304,11 +322,15 @@ function FundInAmNav({
   fundId,
   netWorth,
   currencyCode = "EUR",
+  assetsValue,
+  liabilitiesValue,
 }: {
   amId: string
   fundId: string
   netWorth: number | null
   currencyCode?: string
+  assetsValue: number | null
+  liabilitiesValue: number | null
 }) {
   const pathname = usePathname()
   const base = `/asset-manager/${amId}/fund/${fundId}`
@@ -323,7 +345,17 @@ function FundInAmNav({
     ? new Intl.NumberFormat("en-GB", { style: "currency", currency: currencyCode, maximumFractionDigits: 2 }).format(netWorth)
     : "—"
 
-  function NavGroup({ label, items }: { label: string; items: { title: string; href: string; icon: React.ElementType }[] }) {
+  function fmtCompact(v: number | null): string | null {
+    if (v === null) return null
+    return new Intl.NumberFormat("en-GB", { style: "currency", currency: currencyCode, maximumFractionDigits: 1, notation: "compact" }).format(v)
+  }
+
+  const holdingsValues: Record<string, string | null> = {
+    "/assets": fmtCompact(assetsValue),
+    "/liabilities": fmtCompact(liabilitiesValue),
+  }
+
+  function NavGroup({ label, items, values }: { label: string; items: { title: string; href: string; icon: React.ElementType }[]; values?: Record<string, string | null> }) {
     return (
       <SidebarGroup>
         <SidebarGroupLabel>{label}</SidebarGroupLabel>
@@ -332,8 +364,15 @@ function FundInAmNav({
             <SidebarMenuItem key={item.title}>
               <SidebarMenuButton asChild tooltip={item.title} isActive={isActive(item.href)}>
                 <Link href={`${base}${item.href}`}>
-                  <item.icon />
-                  <span>{item.title}</span>
+                  <item.icon className="shrink-0" />
+                  <div className="flex flex-1 items-center justify-between min-w-0">
+                    <span>{item.title}</span>
+                    {values?.[item.href] != null && (
+                      <span className="text-xs tabular-nums text-muted-foreground group-data-[collapsible=icon]:hidden">
+                        {values[item.href]}
+                      </span>
+                    )}
+                  </div>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
@@ -371,7 +410,7 @@ function FundInAmNav({
         </SidebarMenu>
       </SidebarGroup>
       <SidebarSeparator />
-      <NavGroup label="Holdings" items={FUND_IN_AM_HOLDINGS_NAV} />
+      <NavGroup label="Holdings" items={FUND_IN_AM_HOLDINGS_NAV} values={holdingsValues} />
       <SidebarSeparator />
       <NavGroup label="Financial" items={FUND_IN_AM_FINANCIAL_NAV} />
       <SidebarSeparator />
@@ -589,21 +628,27 @@ export function AppSidebar({ user, entities: initialEntities, ...props }: AppSid
   const entityUUID = activeFund?.entity ?? netWorthEntity?.entity
   const currencyCode = activeFund?._currency?.code ?? netWorthEntity?._currency?.code
 
-  const [netWorth, setNetWorth] = React.useState<number | null>(null)
+  const [assetsValue, setAssetsValue] = React.useState<number | null>(null)
+  const [liabilitiesValue, setLiabilitiesValue] = React.useState<number | null>(null)
+  const netWorth = assetsValue !== null ? assetsValue - (liabilitiesValue ?? 0) : null
   React.useEffect(() => {
-    if (!netWorthEntityId || !entityUUID) { setNetWorth(null); return }
-    function fetchNetWorth() {
-      const params = new URLSearchParams({ entityUUID: entityUUID! })
-      if (currencyCode) params.set("baseCurrency", currencyCode)
-      fetch(`/api/net-worth?${params}`)
-        .then(r => r.json())
-        .then(data => setNetWorth(typeof data.netWorth === "number" ? data.netWorth : null))
-        .catch(() => setNetWorth(null))
+    setAssetsValue(null)
+    setLiabilitiesValue(null)
+    const onAssets = (e: Event) => {
+      const { entityUUID: eu, value } = (e as CustomEvent<{ entityUUID: string; value: number }>).detail
+      if (eu === entityUUID) setAssetsValue(value)
     }
-    fetchNetWorth()
-    window.addEventListener("ledger:update", fetchNetWorth)
-    return () => window.removeEventListener("ledger:update", fetchNetWorth)
-  }, [netWorthEntityId, entityUUID, currencyCode])
+    const onLiabilities = (e: Event) => {
+      const { entityUUID: eu, value } = (e as CustomEvent<{ entityUUID: string; value: number }>).detail
+      if (eu === entityUUID) setLiabilitiesValue(value)
+    }
+    window.addEventListener("assets:update", onAssets)
+    window.addEventListener("liabilities:update", onLiabilities)
+    return () => {
+      window.removeEventListener("assets:update", onAssets)
+      window.removeEventListener("liabilities:update", onLiabilities)
+    }
+  }, [entityUUID])
 
   const amName = fundInAmRoute
     ? (entities.find(e => e.id === fundInAmRoute.amId)?.name ?? null)
@@ -630,6 +675,8 @@ export function AppSidebar({ user, entities: initialEntities, ...props }: AppSid
             fundId={fundInAmRoute.fundId}
             netWorth={netWorth}
             currencyCode={currencyCode}
+            assetsValue={assetsValue}
+            liabilitiesValue={liabilitiesValue}
           />
         ) : entityRoute && activeEntity ? (
           <EntityNav
@@ -638,6 +685,8 @@ export function AppSidebar({ user, entities: initialEntities, ...props }: AppSid
             entityType={ENTITY_SLUGS[entityRoute.slug]}
             netWorth={netWorth}
             currencyCode={activeEntity?._currency?.code}
+            assetsValue={assetsValue}
+            liabilitiesValue={liabilitiesValue}
           />
         ) : (
           <NavLinks entities={entities} />

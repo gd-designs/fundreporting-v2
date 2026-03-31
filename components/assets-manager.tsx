@@ -483,6 +483,7 @@ export function AssetsManager({ entityUUID, baseCurrency: baseCurrencyProp, allo
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ assetsValue: portfolioValue, assetsCount: orderedAssets.length }),
     }).catch(() => {})
+    window.dispatchEvent(new CustomEvent("assets:update", { detail: { entityUUID, value: portfolioValue } }))
   }, [loading, entityUUID, portfolioValue, orderedAssets.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectedRange = React.useMemo(

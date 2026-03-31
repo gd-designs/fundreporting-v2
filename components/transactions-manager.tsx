@@ -1,8 +1,17 @@
 "use client"
 
 import * as React from "react"
-import { ArrowDownLeft, ArrowUpRight, Plus, Trash2 } from "lucide-react"
+import { ArrowDownLeft, ArrowUpRight, Paperclip, Plus, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { DocumentList } from "@/components/document-list"
+import { UploadDocumentsDialog } from "@/components/upload-documents-dialog"
+import { type EntityDocument } from "@/lib/documents"
 import {
   fetchEntityTransactions,
   formatAmountWithCurrency,
@@ -52,6 +61,67 @@ function computeStats(transactions: EntityTransaction[]) {
 
 // ── Main component ───────────────────────────────────────────────────────────
 
+function TransactionDocsDialog({
+  open,
+  onClose,
+  entityUUID,
+  transactionId,
+}: {
+  open: boolean
+  onClose: () => void
+  entityUUID: string
+  transactionId: string
+}) {
+  const [docs, setDocs] = React.useState<EntityDocument[]>([])
+  const [loading, setLoading] = React.useState(false)
+
+  const loadDocs = React.useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await fetch(`/api/documents?entity=${entityUUID}&object_type=transaction&object_id=${transactionId}`)
+      const data = (await res.json()) as { documents?: unknown[] }
+      const raw = Array.isArray(data.documents) ? data.documents : []
+      setDocs(raw.filter((d): d is EntityDocument => !!d && typeof (d as EntityDocument).id === "string") as EntityDocument[])
+    } finally {
+      setLoading(false)
+    }
+  }, [entityUUID, transactionId])
+
+  React.useEffect(() => {
+    if (open) void loadDocs()
+  }, [open, loadDocs])
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Documents</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-4 py-1">
+          {loading && <p className="text-sm text-muted-foreground">Loading…</p>}
+          {!loading && docs.length === 0 && (
+            <p className="text-sm text-muted-foreground">No documents attached yet.</p>
+          )}
+          {!loading && docs.length > 0 && (
+            <DocumentList documents={docs} onUpdated={loadDocs} />
+          )}
+          <UploadDocumentsDialog
+            entityId={entityUUID}
+            objectType="transaction"
+            objectId={transactionId}
+            onUploaded={loadDocs}
+          >
+            <Button size="sm" variant="outline" className="w-full gap-1.5">
+              <Plus className="size-3.5" />
+              Upload document
+            </Button>
+          </UploadDocumentsDialog>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 export function TransactionsManager({ entityUUID }: { entityUUID: string }) {
   const [transactions, setTransactions] = React.useState<EntityTransaction[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -59,6 +129,7 @@ export function TransactionsManager({ entityUUID }: { entityUUID: string }) {
   const [deletingId, setDeletingId] = React.useState<string | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = React.useState<string | null>(null)
   const [expandedIds, setExpandedIds] = React.useState<Set<string>>(new Set())
+  const [docsDialogTxId, setDocsDialogTxId] = React.useState<string | null>(null)
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -178,6 +249,14 @@ export function TransactionsManager({ entityUUID }: { entityUUID: string }) {
                   {formatTxDate(tx.date)}
                 </span>
 
+                <button
+                  className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={(e) => { e.stopPropagation(); setDocsDialogTxId(tx.id) }}
+                  title="Documents"
+                >
+                  <Paperclip className="size-3.5" />
+                </button>
+
                 {isConfirming ? (
                   <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                     <Button
@@ -236,6 +315,15 @@ export function TransactionsManager({ entityUUID }: { entityUUID: string }) {
           )
         })}
       </div>
+
+      {docsDialogTxId && (
+        <TransactionDocsDialog
+          open={!!docsDialogTxId}
+          onClose={() => setDocsDialogTxId(null)}
+          entityUUID={entityUUID}
+          transactionId={docsDialogTxId}
+        />
+      )}
     </div>
   )
 }

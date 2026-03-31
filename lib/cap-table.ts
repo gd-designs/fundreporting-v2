@@ -7,7 +7,7 @@ export type ShareClassFee = {
   type?: "management" | "performance" | "entry" | "exit" | "administration" | "setup" | "other" | null
   rate?: number | null
   basis?: "nav" | "committed_capital" | "call_amount" | "profit" | "fixed" | null
-  frequency?: "one_time" | "monthly" | "quarterly" | "semi_annual" | "annual" | null
+  frequency?: "one_time" | "daily" | "weekly" | "monthly" | "quarterly" | "bi-annually" | "annually" | "on_close" | null
   hurdle_rate?: number | null
   high_water_mark?: boolean | null
   catch_up_rate?: number | null
@@ -31,6 +31,21 @@ export type ShareClass = {
   notes: string | null
   created_at: number
   _share_class_fee?: ShareClassFee[] | null
+  _share_class_distribution?: ShareClassDistribution[] | null
+}
+
+export type ShareClassDistribution = {
+  id: string
+  share_class?: string | null
+  entity?: string | null
+  name?: string | null
+  basis?: "nav" | "committed_capital" | "fixed" | null
+  rate?: number | null
+  fixed_amount?: number | null
+  frequency?: "monthly" | "quarterly" | "bi-annually" | "annually" | "on_close" | null
+  enabled?: boolean | null
+  notes?: string | null
+  created_at?: number | null
 }
 
 export type CapTableShEntry = {
@@ -87,6 +102,7 @@ export type CapTableEntry = {
   created_at: number
   _capital_call?: CapitalCall[] | null
   _shareholder?: { id: string; name?: string | null; email?: string | null; type?: string | null; parent_shareholder?: string | null } | null
+  _share_class?: { id: string; name?: string | null; current_nav?: number | null } | null
 }
 
 export type CapitalCallEntityAddon = {

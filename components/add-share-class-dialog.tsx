@@ -16,6 +16,13 @@ import {
 import { Field, FieldGroup, FieldLabel, FieldError } from "@/components/ui/field"
 import { Spinner } from "@/components/ui/spinner"
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
   FeeForm,
   FEE_TYPE_LABELS,
   BASIS_LABELS,
@@ -23,6 +30,30 @@ import {
   emptyFee,
   type FeeRow,
 } from "@/components/share-class-fee-form"
+
+type DistRow = {
+  _key: string
+  name: string
+  basis: "nav" | "committed_capital" | "fixed"
+  rate: string
+  fixedAmount: string
+  frequency: "monthly" | "quarterly" | "bi-annually" | "annually" | "on_close"
+}
+
+function emptyDist(): DistRow {
+  return { _key: crypto.randomUUID(), name: "", basis: "nav", rate: "", fixedAmount: "", frequency: "on_close" }
+}
+
+const DIST_BASIS_LABELS: Record<string, string> = {
+  nav: "% of NAV",
+  committed_capital: "% of committed",
+  fixed: "Fixed/share",
+}
+
+const DIST_FREQ_LABELS: Record<string, string> = {
+  monthly: "Monthly", quarterly: "Quarterly", "bi-annually": "Bi-annually",
+  annually: "Annually", on_close: "On close",
+}
 
 export function AddShareClassDialog({
   open,
@@ -35,7 +66,7 @@ export function AddShareClassDialog({
   entityUUID: string
   onSaved: () => void
 }) {
-  const [step, setStep] = React.useState<1 | 2>(1)
+  const [step, setStep] = React.useState<1 | 2 | 3>(1)
   const [createdId, setCreatedId] = React.useState<string | null>(null)
 
   // Step 1 fields
@@ -50,6 +81,10 @@ export function AddShareClassDialog({
   const [addedFees, setAddedFees] = React.useState<FeeRow[]>([])
   const [draftFee, setDraftFee] = React.useState<FeeRow>(emptyFee())
 
+  // Step 3 fields
+  const [addedDists, setAddedDists] = React.useState<DistRow[]>([])
+  const [draftDist, setDraftDist] = React.useState<DistRow>(emptyDist())
+
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
@@ -59,9 +94,12 @@ export function AddShareClassDialog({
       setName(""); setCurrentNav(""); setVotingRights(false)
       setLiquidationPref(""); setLiquidationRank(""); setNotes("")
       setAddedFees([]); setDraftFee(emptyFee())
+      setAddedDists([]); setDraftDist(emptyDist())
       setError(null)
     }
   }, [open])
+
+  const STEP_LABELS = ["Share class details", "Fee structure", "Distribution schemes"]
 
   async function handleStep1(e: React.FormEvent) {
     e.preventDefault()
@@ -97,17 +135,14 @@ export function AddShareClassDialog({
     setDraftFee(emptyFee())
   }
 
-  function removeFee(key: string) {
-    setAddedFees((prev) => prev.filter((f) => f._key !== key))
-  }
-
   async function handleFinish() {
     if (!createdId) return
-    if (addedFees.length === 0) { onSaved(); onClose(); return }
     setSaving(true); setError(null)
     try {
-      await Promise.all(
-        addedFees.map((fee) =>
+      const tasks: Promise<unknown>[] = []
+
+      for (const fee of addedFees) {
+        tasks.push(
           fetch("/api/share-class-fees", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -126,11 +161,32 @@ export function AddShareClassDialog({
             }),
           })
         )
-      )
+      }
+
+      for (const d of addedDists) {
+        tasks.push(
+          fetch("/api/share-class-distributions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              entity: entityUUID,
+              share_class: createdId,
+              name: d.name || null,
+              basis: d.basis,
+              rate: d.basis !== "fixed" && d.rate ? Number(d.rate) : null,
+              fixed_amount: d.basis === "fixed" && d.fixedAmount ? Number(d.fixedAmount) : null,
+              frequency: d.frequency,
+              enabled: true,
+            }),
+          })
+        )
+      }
+
+      await Promise.all(tasks)
       onSaved()
       onClose()
     } catch {
-      setError("Failed to save fees.")
+      setError("Failed to save.")
     } finally {
       setSaving(false)
     }
@@ -140,13 +196,15 @@ export function AddShareClassDialog({
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{step === 1 ? "Add share class" : "Add fees"}</DialogTitle>
+          <DialogTitle>
+            {step === 1 ? "Add share class" : step === 2 ? "Add fees" : "Add distributions"}
+          </DialogTitle>
           <p className="text-xs text-muted-foreground">
-            Step {step} of 2 — {step === 1 ? "Share class details" : "Fee structure"}
+            Step {step} of 3 — {STEP_LABELS[step - 1]}
           </p>
         </DialogHeader>
 
-        {/* ── Step 1 ── */}
+        {/* ── Step 1: Details ── */}
         {step === 1 && (
           <form onSubmit={handleStep1}>
             <FieldGroup className="mt-2">
@@ -187,7 +245,7 @@ export function AddShareClassDialog({
           </form>
         )}
 
-        {/* ── Step 2 ── */}
+        {/* ── Step 2: Fees ── */}
         {step === 2 && (
           <div className="mt-2 space-y-4">
             {addedFees.length > 0 && (
@@ -202,7 +260,7 @@ export function AddShareClassDialog({
                       }
                       <span>{BASIS_LABELS[fee.basis] ?? fee.basis}</span>
                       <span>{FREQ_LABELS[fee.frequency] ?? fee.frequency}</span>
-                      <button onClick={() => removeFee(fee._key)} className="text-destructive hover:text-destructive/80">
+                      <button onClick={() => setAddedFees((prev) => prev.filter((f) => f._key !== fee._key))} className="text-destructive hover:text-destructive/80">
                         <Trash2 className="size-3.5" />
                       </button>
                     </div>
@@ -216,11 +274,92 @@ export function AddShareClassDialog({
             {error && <FieldError>{error}</FieldError>}
 
             <DialogFooter className="flex-row justify-between">
+              <Button type="button" variant="ghost" onClick={() => setStep(3)}>
+                Skip
+              </Button>
+              <Button onClick={() => setStep(3)} disabled={saving}>
+                Next →
+              </Button>
+            </DialogFooter>
+          </div>
+        )}
+
+        {/* ── Step 3: Distribution schemes ── */}
+        {step === 3 && (
+          <div className="mt-2 space-y-4">
+            {addedDists.length > 0 && (
+              <div className="space-y-2">
+                {addedDists.map((d) => (
+                  <div key={d._key} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                    <span className="font-medium">{d.name || (d.basis === "fixed" ? `${d.fixedAmount || "—"} fixed` : `${d.rate || "—"}%`)}</span>
+                    <div className="flex items-center gap-3 text-muted-foreground">
+                      <span>{DIST_BASIS_LABELS[d.basis]}</span>
+                      <span>{DIST_FREQ_LABELS[d.frequency]}</span>
+                      <button onClick={() => setAddedDists((prev) => prev.filter((x) => x._key !== d._key))} className="text-destructive hover:text-destructive/80">
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="rounded-lg border p-4 space-y-3">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Add scheme</p>
+              <Field>
+                <FieldLabel>Name (optional)</FieldLabel>
+                <Input placeholder="e.g. Quarterly income" value={draftDist.name} onChange={(e) => setDraftDist((d) => ({ ...d, name: e.target.value }))} />
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field>
+                  <FieldLabel>Basis</FieldLabel>
+                  <Select value={draftDist.basis} onValueChange={(v) => setDraftDist((d) => ({ ...d, basis: v as DistRow["basis"] }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="nav">% of current value (NAV)</SelectItem>
+                      <SelectItem value="committed_capital">% of total investment</SelectItem>
+                      <SelectItem value="fixed">Fixed amount per share</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field>
+                  <FieldLabel>Frequency</FieldLabel>
+                  <Select value={draftDist.frequency} onValueChange={(v) => setDraftDist((d) => ({ ...d, frequency: v as DistRow["frequency"] }))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="monthly">Monthly</SelectItem>
+                      <SelectItem value="quarterly">Quarterly</SelectItem>
+                      <SelectItem value="bi-annually">Bi-annually</SelectItem>
+                      <SelectItem value="annually">Annually</SelectItem>
+                      <SelectItem value="on_close">On period close</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+              </div>
+              {draftDist.basis === "fixed" ? (
+                <Field>
+                  <FieldLabel>Fixed amount per share</FieldLabel>
+                  <Input type="number" min="0" step="0.0001" placeholder="e.g. 10.00" value={draftDist.fixedAmount} onChange={(e) => setDraftDist((d) => ({ ...d, fixedAmount: e.target.value }))} />
+                </Field>
+              ) : (
+                <Field>
+                  <FieldLabel>Rate (%)</FieldLabel>
+                  <Input type="number" min="0" step="0.01" placeholder="e.g. 3.00" value={draftDist.rate} onChange={(e) => setDraftDist((d) => ({ ...d, rate: e.target.value }))} />
+                </Field>
+              )}
+              <Button type="button" size="sm" variant="outline" className="w-full" onClick={() => { setAddedDists((prev) => [...prev, draftDist]); setDraftDist(emptyDist()) }}>
+                + Add scheme
+              </Button>
+            </div>
+
+            {error && <FieldError>{error}</FieldError>}
+
+            <DialogFooter className="flex-row justify-between">
               <Button type="button" variant="ghost" onClick={() => { onSaved(); onClose() }}>
-                Skip fees
+                Skip
               </Button>
               <Button onClick={handleFinish} disabled={saving}>
-                {saving ? <Spinner className="size-4" /> : addedFees.length > 0 ? `Save ${addedFees.length} fee${addedFees.length > 1 ? "s" : ""}` : "Done"}
+                {saving ? <Spinner className="size-4" /> : "Done"}
               </Button>
             </DialogFooter>
           </div>

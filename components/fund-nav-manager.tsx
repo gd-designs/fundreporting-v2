@@ -102,7 +102,7 @@ const TYPE_COLORS: Record<string, string> = {
 
 // ─── Mutations Mini Table ─────────────────────────────────────────────────────
 
-function MutationRows({ mutations, currencyCode }: { mutations: FundMutation[]; currencyCode: string }) {
+function MutationRows({ mutations, currencyCode, footer }: { mutations: FundMutation[]; currencyCode: string; footer?: React.ReactNode }) {
   if (mutations.length === 0) {
     return (
       <p className="text-sm text-muted-foreground text-center py-6">No mutations for this period.</p>
@@ -156,6 +156,7 @@ function MutationRows({ mutations, currencyCode }: { mutations: FundMutation[]; 
           )
         })}
       </tbody>
+      {footer}
     </table>
   )
 }
@@ -349,29 +350,25 @@ function DeployCallDialog({
     if (grossAmount <= 0) { setError("Amount invested is required."); return }
     setSaving(true); setError(null)
     try {
-      const mutRes = await fetch("/api/fund-mutations", {
+      const mutRes = await fetch("/api/fund-subscribe-mutation", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          entity: entityUUID,
-          ...(openPeriod ? { period: openPeriod.id } : {}),
+          entityUUID,
+          periodId: openPeriod?.id ?? null,
           cap_table_entry: entry.id,
-          type: "subscription",
           nav_per_share: nav,
           amount_invested: grossAmount,
           ...(feeRate ? { fee_rate: Number(feeRate) / 100 } : {}),
           ...(feeAmount > 0 ? { fee_amount: feeAmount } : {}),
           amount_for_shares: amountForShares,
-          ...(sharesIssued != null ? { shares_issued: sharesIssued } : {}),
+          shares_issued: sharesIssued,
           mutation_at: mutationAt ? mutationAt.getTime() : Date.now(),
+          callId: call.id,
+          fundShareholderId: entry._shareholder?.id ?? "",
         }),
       })
       if (!mutRes.ok) throw new Error("Failed to create mutation")
-      await fetch(`/api/capital-calls/${call.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ deployed_at: Date.now() }),
-      })
       onSuccess()
       onClose()
     } catch (e) {
@@ -509,27 +506,23 @@ function SubscribeAllDialog({
           const feeAmt = gross * feeRateNum / 100
           const amountForShares = gross - feeAmt
           const sharesIssued = nav > 0 && amountForShares > 0 ? amountForShares / nav : null
-          await fetch("/api/fund-mutations", {
+          await fetch("/api/fund-subscribe-mutation", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-              entity: entityUUID,
-              ...(openPeriod ? { period: openPeriod.id } : {}),
+              entityUUID,
+              periodId: openPeriod?.id ?? null,
               cap_table_entry: entry.id,
-              type: "subscription",
               nav_per_share: nav,
               amount_invested: gross,
               ...(feeRateNum > 0 ? { fee_rate: feeRateNum / 100 } : {}),
               ...(feeAmt > 0 ? { fee_amount: feeAmt } : {}),
               amount_for_shares: amountForShares,
-              ...(sharesIssued != null ? { shares_issued: sharesIssued } : {}),
+              shares_issued: sharesIssued,
               mutation_at: mutationTs,
+              callId: call.id,
+              fundShareholderId: entry._shareholder?.id ?? "",
             }),
-          })
-          await fetch(`/api/capital-calls/${call.id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ deployed_at: Date.now() }),
           })
         })
       )
@@ -616,13 +609,7 @@ function SubscribeAllDialog({
 // ─── Open Period Dialog ───────────────────────────────────────────────────────
 
 function OpenPeriodDialog({
-  open,
-  onClose,
-  entityUUID,
-  previousPeriod,
-  pendingMutations,
-  currencyCode,
-  onSuccess,
+  open, onClose, entityUUID, previousPeriod, pendingMutations, currencyCode, periodFrequency, onSuccess,
 }: {
   open: boolean
   onClose: () => void
@@ -630,32 +617,58 @@ function OpenPeriodDialog({
   previousPeriod: FundPeriod | null
   pendingMutations: FundMutation[]
   currencyCode: string
+  periodFrequency?: string | null
   onSuccess: () => void
 }) {
+  // Compute suggested opening values from mutations
+  const pendingSubs = pendingMutations.filter((m) => m.type === "subscription")
+  const newSharesIssued = pendingSubs.reduce((s, m) => s + (m.shares_issued ?? 0), 0)
+  const redeemedShares = pendingMutations.filter((m) => m.type === "redemption").reduce((s, m) => s + (m.shares_redeemed ?? 0), 0)
+  const subsAum = pendingSubs.reduce((s, m) => s + (m.amount_for_shares ?? 0), 0)
+  const redemptionsAum = pendingMutations.filter((m) => m.type === "redemption").reduce((s, m) => s + (m.amount_returned ?? 0), 0)
+  const distributionsAum = pendingMutations.filter((m) => m.type === "distribution").reduce((s, m) => s + (m.amount_distributed ?? 0), 0)
+  const suggestedNav = pendingSubs[0]?.nav_per_share ?? previousPeriod?.nav_end ?? null
+  const suggestedShares = (previousPeriod?.total_shares_end ?? 0) + newSharesIssued - redeemedShares
+  const prevAum = previousPeriod?.total_aum_end ?? ((previousPeriod?.total_shares_end != null && previousPeriod?.nav_end != null) ? (previousPeriod.total_shares_end * previousPeriod.nav_end) : 0)
+  const suggestedAum = prevAum + subsAum - redemptionsAum - distributionsAum
+
+  // Suggested opening date = last period close + 1 day
+  const suggestedOpenDate = React.useMemo(() => {
+    if (previousPeriod?.closed_at) return new Date(previousPeriod.closed_at + 86400000)
+    return new Date()
+  }, [previousPeriod?.closed_at])
+
   const [label, setLabel] = React.useState("")
-  const [openedAt, setOpenedAt] = React.useState<Date | undefined>(new Date())
+  const [openedAt, setOpenedAt] = React.useState<Date | undefined>(suggestedOpenDate)
+  const [navStart, setNavStart] = React.useState(suggestedNav != null ? String(suggestedNav) : "")
+  const [sharesStart, setSharesStart] = React.useState(String(suggestedShares.toFixed(4)))
+  const [aumStart, setAumStart] = React.useState(suggestedAum > 0 ? String(suggestedAum.toFixed(2)) : "")
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
   React.useEffect(() => {
-    if (open) { setLabel(""); setOpenedAt(new Date()); setError(null) }
+    if (open) {
+      setLabel("")
+      setOpenedAt(suggestedOpenDate)
+      setNavStart(suggestedNav != null ? String(suggestedNav) : "")
+      setSharesStart(String(suggestedShares.toFixed(4)))
+      setAumStart(suggestedAum > 0 ? String(suggestedAum.toFixed(2)) : "")
+      setError(null)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
-  const totalSubsIn = pendingMutations
-    .filter((m) => m.type === "subscription")
-    .reduce((s, m) => s + (m.amount_for_shares ?? 0), 0)
+  // Summary rows showing breakdown
+  const summaryRows = [
+    previousPeriod ? { label: `End of ${previousPeriod.label ?? "last period"}`, shares: previousPeriod.total_shares_end ?? null, aum: prevAum || null } : null,
+    distributionsAum > 0 ? { label: "Distributions paid", shares: null, aum: -distributionsAum } : null,
+    redeemedShares > 0 ? { label: "Redemptions", shares: -redeemedShares, aum: -redemptionsAum } : null,
+    newSharesIssued > 0 ? { label: "New subscriptions", shares: newSharesIssued, aum: subsAum } : null,
+  ].filter(Boolean) as Array<{ label: string; shares: number | null; aum: number | null }>
 
   async function handleOpen() {
     setSaving(true); setError(null)
     try {
-      const pendingSubs = pendingMutations.filter((m) => m.type === "subscription")
-      // Derive nav_start from the first pending subscription's nav_per_share
-      const navStart = pendingSubs[0]?.nav_per_share ?? null
-      // total_shares_start = shares carried from previous period + shares issued in pending subscriptions
-      const newSharesIssued = pendingSubs.reduce((s, m) => s + (m.shares_issued ?? 0), 0)
-      const totalSharesStart = (previousPeriod?.total_shares_end ?? 0) + newSharesIssued
-      // total_aum_start = sum of all subscription amounts in pending mutations
-      const totalAumStart = pendingSubs.reduce((s, m) => s + (m.amount_for_shares ?? 0), 0)
       const res = await fetch("/api/fund-periods", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -664,14 +677,13 @@ function OpenPeriodDialog({
           status: "open",
           label: label || null,
           opened_at: openedAt ? openedAt.getTime() : Date.now(),
-          ...(navStart != null ? { nav_start: navStart } : {}),
-          total_shares_start: totalSharesStart,
-          ...(totalAumStart > 0 ? { total_aum_start: totalAumStart } : {}),
+          ...(navStart ? { nav_start: Number(navStart) } : {}),
+          total_shares_start: sharesStart ? Number(sharesStart) : 0,
+          ...(aumStart ? { total_aum_start: Number(aumStart) } : {}),
         }),
       })
       if (!res.ok) throw new Error("Failed to open period")
       const newPeriod = await res.json() as { id: string }
-      // Link all pending (period-less) mutations to the new period
       if (pendingMutations.length > 0) {
         await Promise.all(
           pendingMutations.map((m) =>
@@ -694,36 +706,82 @@ function OpenPeriodDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v && !saving) onClose() }}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader><DialogTitle>Open new period</DialogTitle></DialogHeader>
-        <div className="flex flex-col gap-3 py-1">
-          {pendingMutations.length > 0 && (
-            <div className="rounded-lg border p-3 bg-muted/30 text-sm flex flex-col gap-1">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Pending mutations</span>
-                <span className="font-medium">{pendingMutations.length} will be linked</span>
-              </div>
-              {totalSubsIn > 0 && (
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Subscriptions total</span>
-                  <span className="font-medium text-emerald-600">+{fmtCcy(totalSubsIn, currencyCode)}</span>
-                </div>
-              )}
-              {previousPeriod?.total_shares_end != null && (
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Shares carried forward</span>
-                  <span className="font-medium">{fmt(previousPeriod.total_shares_end, 4)}</span>
-                </div>
-              )}
+        <div className="flex flex-col gap-4 py-1">
+          {/* Breakdown summary */}
+          {summaryRows.length > 0 && (
+            <div className="rounded-lg border overflow-hidden text-sm">
+              <table className="w-full">
+                <thead className="bg-muted/30 border-b">
+                  <tr>
+                    <th className="text-left py-1.5 px-3 text-xs font-medium text-muted-foreground">Item</th>
+                    <th className="text-right py-1.5 px-3 text-xs font-medium text-muted-foreground">Shares</th>
+                    <th className="text-right py-1.5 px-3 text-xs font-medium text-muted-foreground">AUM</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {summaryRows.map((row, i) => {
+                    const negative = (row.shares ?? 0) < 0 || (row.aum ?? 0) < 0
+                    const positive = (row.shares ?? 0) > 0 || ((row.aum ?? 0) > 0 && i > 0)
+                    const color = negative ? "text-red-600" : positive ? "text-emerald-600" : ""
+                    return (
+                      <tr key={i} className="border-b last:border-0">
+                        <td className={`py-1.5 px-3 ${color}`}>{row.label}</td>
+                        <td className={`py-1.5 px-3 text-right tabular-nums ${color}`}>
+                          {row.shares != null ? (row.shares >= 0 ? fmt(row.shares, 4) : `−${fmt(Math.abs(row.shares), 4)}`) : "—"}
+                        </td>
+                        <td className={`py-1.5 px-3 text-right tabular-nums ${color}`}>
+                          {row.aum != null ? (row.aum >= 0 ? fmtCcy(row.aum, currencyCode) : `−${fmtCcy(Math.abs(row.aum), currencyCode)}`) : "—"}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+                <tfoot className="border-t bg-muted/20">
+                  <tr>
+                    <td className="py-1.5 px-3 text-xs font-semibold">Opening position</td>
+                    <td className="py-1.5 px-3 text-right tabular-nums text-xs font-semibold">{fmt(suggestedShares, 4)}</td>
+                    <td className="py-1.5 px-3 text-right tabular-nums text-xs font-semibold">{suggestedAum > 0 ? fmtCcy(suggestedAum, currencyCode) : "—"}</td>
+                  </tr>
+                </tfoot>
+              </table>
             </div>
           )}
+
+          {/* Confirm / override opening values */}
+          <div className="grid grid-cols-3 gap-3">
+            <Field>
+              <FieldLabel htmlFor="op-nav">NAV per share</FieldLabel>
+              <Input id="op-nav" type="number" min="0" step="0.0001" placeholder="0.0000"
+                value={navStart} onChange={(e) => setNavStart(e.target.value)} />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="op-shares">Total shares</FieldLabel>
+              <Input id="op-shares" type="number" min="0" step="0.0001" placeholder="0.0000"
+                value={sharesStart} onChange={(e) => setSharesStart(e.target.value)} />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="op-aum">AUM start</FieldLabel>
+              <Input id="op-aum" type="number" min="0" step="0.01" placeholder="0.00"
+                value={aumStart} onChange={(e) => setAumStart(e.target.value)} />
+            </Field>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <Field>
               <FieldLabel htmlFor="op-label">Period label</FieldLabel>
-              <Input id="op-label" placeholder="e.g. Period 1" value={label} onChange={(e) => setLabel(e.target.value)} />
+              <Input id="op-label" placeholder="e.g. Period 2" value={label} onChange={(e) => setLabel(e.target.value)} />
             </Field>
             <DatePickerInput id="op-opened-at" label="Opening date" value={openedAt} onChange={setOpenedAt} />
           </div>
+
+          {periodFrequency && previousPeriod?.closed_at && (
+            <p className="text-xs text-muted-foreground">
+              Opening date suggested from last period close ({fmtDate(previousPeriod.closed_at)}) + 1 day
+            </p>
+          )}
+
           {error && <FieldError>{error}</FieldError>}
         </div>
         <DialogFooter>
@@ -736,6 +794,51 @@ function OpenPeriodDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+// ─── Investor Position (computed from mutations) ──────────────────────────────
+
+type InvestorPosition = {
+  entryId: string
+  name: string | null
+  email: string | null
+  shareClass: string | null
+  netShares: number
+  totalIn: number
+  committedAmount: number | null
+}
+
+function computeCurrentPositions(
+  allMutations: FundMutation[],
+  capTableEntries: CapTableEntry[]
+): InvestorPosition[] {
+  const entryMap = new Map(capTableEntries.map((e) => [e.id, e]))
+  const posMap = new Map<string, InvestorPosition>()
+  for (const m of allMutations) {
+    if (!m.period) continue
+    const entryId = m.cap_table_entry ?? m._cap_table_entry?.id ?? null
+    if (!entryId) continue
+    if (!posMap.has(entryId)) {
+      const entry = entryMap.get(entryId)
+      posMap.set(entryId, {
+        entryId,
+        name: m._cap_table_entry?._shareholder?.name ?? null,
+        email: m._cap_table_entry?._shareholder?.email ?? null,
+        shareClass: entry?.share_class ?? null,
+        netShares: 0,
+        totalIn: 0,
+        committedAmount: entry?.committed_amount ?? null,
+      })
+    }
+    const pos = posMap.get(entryId)!
+    if (m.type === "subscription") {
+      pos.netShares += m.shares_issued ?? 0
+      pos.totalIn += m.amount_for_shares ?? 0
+    } else if (m.type === "redemption") {
+      pos.netShares -= m.shares_redeemed ?? 0
+    }
+  }
+  return Array.from(posMap.values()).filter((p) => p.netShares > 0)
 }
 
 // ─── Period close date suggestion ────────────────────────────────────────────
@@ -777,9 +880,10 @@ function OpenPeriodSnapshot({
   entityUUID,
   shareClasses,
   previousPeriod,
+  priorPeriods,
   periodFrequency,
+  receivedUndeployedTotal,
   onRefresh,
-  onAddMutation,
 }: {
   period: FundPeriod
   mutations: FundMutation[]
@@ -787,9 +891,10 @@ function OpenPeriodSnapshot({
   entityUUID: string
   shareClasses: ShareClass[]
   previousPeriod: FundPeriod | null
+  priorPeriods: FundPeriod[]
   periodFrequency?: string | null
+  receivedUndeployedTotal: number
   onRefresh: () => void
-  onAddMutation: () => void
 }) {
   const [stats, setStats] = React.useState<EntityStats>(null)
   const [statsLoading, setStatsLoading] = React.useState(true)
@@ -819,10 +924,12 @@ function OpenPeriodSnapshot({
   const netMutationFlow = totalSubsIn - totalRedOut - totalDist
 
   // Step B: Portfolio value from entity stats
+  // Subtract received-but-undeployed capital — that cash is in the fund bank account
+  // but hasn't been processed as a subscription mutation yet (belongs to next period).
   const assetsValue = stats?.assetsValue ?? null
   const liabilitiesValue = stats?.liabilitiesValue ?? null
   const grossAum = assetsValue != null && liabilitiesValue != null
-    ? assetsValue - liabilitiesValue
+    ? assetsValue - liabilitiesValue - receivedUndeployedTotal
     : null
 
   // Derive starting shares from previous period's end (ignores any wrong stored value)
@@ -885,10 +992,6 @@ function OpenPeriodSnapshot({
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={onAddMutation}>
-            <Plus className="size-3.5 mr-1.5" />
-            Add mutation
-          </Button>
           <Button size="sm" variant="outline" onClick={() => setCloseOpen(true)}>
             <Lock className="size-3.5 mr-1.5" />
             Close period
@@ -925,7 +1028,7 @@ function OpenPeriodSnapshot({
             <p className="text-xs text-muted-foreground">Loading live data…</p>
           ) : (
             <div className="divide-y flex-1">
-              <SnapRow label="Total invested assets" value={assetsValue != null ? fmtCcy(assetsValue, currencyCode) : "—"} />
+              <SnapRow label="Total invested assets" value={assetsValue != null ? fmtCcy(assetsValue - receivedUndeployedTotal, currencyCode) : "—"} />
               <SnapRow
                 label="Total debt / liabilities"
                 value={liabilitiesValue != null && liabilitiesValue > 0 ? <span className="text-red-600">−{fmtCcy(liabilitiesValue, currencyCode)}</span> : liabilitiesValue === 0 ? fmtCcy(0, currencyCode) : "—"}
@@ -933,13 +1036,16 @@ function OpenPeriodSnapshot({
               <SnapRow label="Gross AUM" value={grossAum != null ? fmtCcy(grossAum, currencyCode) : "—"} />
               <SnapRow
                 label="Costs & fees"
-                value={period.pnl_costs != null && period.pnl_costs > 0
-                  ? <span className="text-red-600">−{fmtCcy(period.pnl_costs, currencyCode)}</span>
-                  : <span className="text-muted-foreground">€0 — calculated at close</span>}
+                value={(() => {
+                  const cumulativeFees = priorPeriods.reduce((s, p) => s + (p.management_fee_total ?? 0), 0)
+                  return cumulativeFees > 0
+                    ? <span className="text-red-600">−{fmtCcy(cumulativeFees, currencyCode)}</span>
+                    : <span className="text-muted-foreground">€0 — calculated at close</span>
+                })()}
               />
               <SnapRow
                 label="Net AUM"
-                value={grossAum != null ? fmtCcy(grossAum - (period.pnl_costs ?? 0), currencyCode) : "—"}
+                value={grossAum != null ? fmtCcy(grossAum - priorPeriods.reduce((s, p) => s + (p.management_fee_total ?? 0), 0), currencyCode) : "—"}
                 highlight
               />
             </div>
@@ -1002,6 +1108,8 @@ function OpenPeriodSnapshot({
         currencyCode={currencyCode}
         entityUUID={entityUUID}
         suggestedClose={suggestedClose}
+        receivedUndeployedTotal={receivedUndeployedTotal}
+        cumulativeFees={priorPeriods.reduce((s, p) => s + (p.management_fee_total ?? 0), 0)}
         tentative={{
           grossNavPerShare: grossNavPerShare ?? undefined,
           grossYield: grossYield ?? undefined,
@@ -1018,6 +1126,37 @@ function OpenPeriodSnapshot({
   )
 }
 
+// ─── Close Period Dialog helpers (defined outside to avoid remount on each render) ──
+
+function CcyField({ id, label, value, onChange, hint, readOnly, currencyCode }: {
+  id: string; label: React.ReactNode; value: string; onChange?: (v: string) => void; hint?: React.ReactNode; readOnly?: boolean; currencyCode: string
+}) {
+  return (
+    <Field>
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <div className="relative">
+        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">{currencyCode}</span>
+        <Input
+          id={id} type="number" min="0" step="0.0001" className={`pl-12 ${readOnly ? "bg-muted text-muted-foreground" : ""}`}
+          placeholder="0.0000" value={value}
+          onChange={onChange ? (e) => onChange(e.target.value) : undefined}
+          readOnly={readOnly}
+        />
+      </div>
+      {hint && <p className="text-xs text-muted-foreground mt-0.5">{hint}</p>}
+    </Field>
+  )
+}
+
+function ReadRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between py-1.5 text-sm border-b last:border-0">
+      <span className="text-muted-foreground">{label}</span>
+      <span className="font-medium tabular-nums">{value}</span>
+    </div>
+  )
+}
+
 // ─── Close Period Dialog ──────────────────────────────────────────────────────
 
 function ClosePeriodDialog({
@@ -1028,6 +1167,8 @@ function ClosePeriodDialog({
   currencyCode,
   entityUUID,
   suggestedClose,
+  receivedUndeployedTotal = 0,
+  cumulativeFees = 0,
   tentative,
   onSuccess,
 }: {
@@ -1038,6 +1179,8 @@ function ClosePeriodDialog({
   currencyCode: string
   entityUUID: string
   suggestedClose?: Date | null
+  receivedUndeployedTotal?: number
+  cumulativeFees?: number
   tentative?: {
     grossNavPerShare?: number
     grossYield?: number
@@ -1051,66 +1194,86 @@ function ClosePeriodDialog({
   onSuccess: () => void
 }) {
   const t = tentative ?? {}
+  const [step, setStep] = React.useState<1 | 2>(1)
 
-  // Editable fields — pre-filled from tentative snapshot values
-  const [grossNav, setGrossNav] = React.useState(t.grossNavPerShare != null ? String(t.grossNavPerShare) : "")
-  const [mgmtFeePerShare, setMgmtFeePerShare] = React.useState(t.mgmtFeePerShare != null ? String(t.mgmtFeePerShare) : "")
-  const [mgmtFeeTotal, setMgmtFeeTotal] = React.useState(t.mgmtFeeTotal != null ? String(t.mgmtFeeTotal) : "")
-  const [navEnd, setNavEnd] = React.useState(
-    t.netNavPerShare != null ? String(t.netNavPerShare) : (period.nav_end != null ? String(period.nav_end) : "")
-  )
+  // ── Step 1: Financials ──────────────────────────────────────────────────────
+  const [totalInvestedAssets, setTotalInvestedAssets] = React.useState("")
+  const [totalDebt, setTotalDebt] = React.useState("")
+  const [pnlCosts, setPnlCosts] = React.useState(cumulativeFees > 0 ? String(cumulativeFees) : "0")
   const [totalSharesEnd, setTotalSharesEnd] = React.useState(
     t.totalShares != null ? String(t.totalShares) : (period.total_shares_end != null ? String(period.total_shares_end) : "")
   )
-  const [pnlCosts, setPnlCosts] = React.useState("0")
   const [closedAt, setClosedAt] = React.useState<Date | undefined>(suggestedClose ?? new Date())
   const [notes, setNotes] = React.useState(period.notes ?? "")
+
+  // ── Step 2: NAV Calculation ─────────────────────────────────────────────────
+  const [grossNav, setGrossNav] = React.useState(t.grossNavPerShare != null ? String(t.grossNavPerShare) : "")
+  const [mgmtFeePerShareField, setMgmtFeePerShareField] = React.useState(t.mgmtFeePerShare != null ? String(t.mgmtFeePerShare) : "")
+  const [mgmtFeeTotalField, setMgmtFeeTotalField] = React.useState(t.mgmtFeeTotal != null ? String(t.mgmtFeeTotal) : "")
+  const [navEnd, setNavEnd] = React.useState(
+    t.netNavPerShare != null ? String(t.netNavPerShare) : (period.nav_end != null ? String(period.nav_end) : "")
+  )
+
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
-  // Re-sync when tentative values change (e.g. dialog re-opens with fresh data)
+  // Fetch entity stats once when dialog opens to pre-fill financials
   React.useEffect(() => {
     if (!open) return
-    if (t.grossNavPerShare != null) setGrossNav(String(t.grossNavPerShare))
-    if (t.mgmtFeePerShare != null) setMgmtFeePerShare(String(t.mgmtFeePerShare))
-    if (t.mgmtFeeTotal != null) setMgmtFeeTotal(String(t.mgmtFeeTotal))
-    if (t.netNavPerShare != null) setNavEnd(String(t.netNavPerShare))
-    if (t.totalShares != null) setTotalSharesEnd(String(t.totalShares))
+    setStep(1)
+    setError(null)
     if (suggestedClose) setClosedAt(suggestedClose)
+    if (t.totalShares != null) setTotalSharesEnd(String(t.totalShares))
+    if (t.grossNavPerShare != null) setGrossNav(String(t.grossNavPerShare))
+    if (t.mgmtFeePerShare != null) setMgmtFeePerShareField(String(t.mgmtFeePerShare))
+    if (t.mgmtFeeTotal != null) setMgmtFeeTotalField(String(t.mgmtFeeTotal))
+    if (t.netNavPerShare != null) setNavEnd(String(t.netNavPerShare))
+    // Pre-fill financial balances from entity stats
+    fetch(`/api/entity-stats/${entityUUID}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then((d: { assetsValue?: number; liabilitiesValue?: number } | null) => {
+        if (d?.assetsValue != null) setTotalInvestedAssets(String(d.assetsValue - receivedUndeployedTotal))
+        if (d?.liabilitiesValue != null) setTotalDebt(String(d.liabilitiesValue))
+      })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
-  const navValue = navEnd ? Number(navEnd) : null
-  const grossNavValue = grossNav ? Number(grossNav) : null
+  // ── Derived Step 1 values ───────────────────────────────────────────────────
+  const investedNum = totalInvestedAssets ? Number(totalInvestedAssets) : null
+  const debtNum = totalDebt ? Number(totalDebt) : 0
+  const pnlNum = Number(pnlCosts) || 0
+  const assetMinusLiabilities = investedNum != null ? investedNum - debtNum : null
+  const totalAumEnd = assetMinusLiabilities != null ? assetMinusLiabilities - pnlNum : null
+  const sharesEndNum = totalSharesEnd ? Number(totalSharesEnd) : null
 
-  // Derive yields for display
+  // ── Auto-derive Step 2 grossNav from Step 1 when advancing ─────────────────
+  function handleNextStep() {
+    setError(null)
+    // Compute gross NAV from step 1 data if not overridden
+    if (totalAumEnd != null && sharesEndNum != null && sharesEndNum > 0) {
+      const derived = totalAumEnd / sharesEndNum
+      setGrossNav(String(derived.toFixed(4)))
+      // Derive net NAV = grossNav - mgmtFeePerShare
+      const feePs = mgmtFeePerShareField ? Number(mgmtFeePerShareField) : (t.mgmtFeePerShare ?? 0)
+      setNavEnd(String((derived - feePs).toFixed(4)))
+    }
+    setStep(2)
+  }
+
+  // ── Derived Step 2 values ───────────────────────────────────────────────────
+  const grossNavValue = grossNav ? Number(grossNav) : null
+  const navValue = navEnd ? Number(navEnd) : null
   const grossYield = grossNavValue != null && period.nav_start != null && period.nav_start > 0
     ? (grossNavValue - period.nav_start) / period.nav_start : null
   const netYield = navValue != null && period.nav_start != null && period.nav_start > 0
     ? (navValue - period.nav_start) / period.nav_start : null
-
-  function CcyField({ id, label, value, onChange, hint }: { id: string; label: React.ReactNode; value: string; onChange: (v: string) => void; hint?: React.ReactNode }) {
-    return (
-      <Field>
-        <FieldLabel htmlFor={id}>{label}</FieldLabel>
-        <div className="relative">
-          <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">{currencyCode}</span>
-          <Input id={id} type="number" min="0" step="0.0001" className="pl-12" placeholder="0.0000" value={value} onChange={(e) => onChange(e.target.value)} />
-        </div>
-        {hint && <p className="text-xs text-muted-foreground mt-0.5">{hint}</p>}
-      </Field>
-    )
-  }
 
   async function handleConfirm() {
     if (!navValue || navValue <= 0) { setError("Net NAV per share is required."); return }
     setSaving(true)
     setError(null)
     try {
-      const entityStats = await fetch(`/api/entity-stats/${entityUUID}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null) as { assetsValue: number; liabilitiesValue: number } | null
-
       const res = await fetch(`/api/fund-periods/${period.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -1121,17 +1284,15 @@ function ClosePeriodDialog({
           ...(grossNavValue != null ? { nav_gross_end: grossNavValue } : {}),
           ...(grossYield != null ? { yield_gross: grossYield } : {}),
           ...(netYield != null ? { yield_net: netYield } : {}),
-          ...(mgmtFeePerShare ? { management_fee_per_share: Number(mgmtFeePerShare) } : {}),
-          ...(mgmtFeeTotal ? { management_fee_total: Number(mgmtFeeTotal) } : {}),
-          // pnl_costs = actual P&L costs THIS period (0 by default; management_fee_total carries to NEXT period as its pnl_costs)
-          pnl_costs: Number(pnlCosts) || 0,
-          ...(totalSharesEnd ? { total_shares_end: Number(totalSharesEnd) } : {}),
+          ...(mgmtFeePerShareField ? { management_fee_per_share: Number(mgmtFeePerShareField) } : {}),
+          ...(mgmtFeeTotalField ? { management_fee_total: Number(mgmtFeeTotalField) } : {}),
+          pnl_costs: pnlNum,
+          ...(sharesEndNum != null ? { total_shares_end: sharesEndNum } : {}),
           ...(notes.trim() ? { notes: notes.trim() } : {}),
-          ...(entityStats ? {
-            total_invested_assets: entityStats.assetsValue,
-            total_debt: entityStats.liabilitiesValue,
-            // total_aum_end = row 14: assets − liabilities − pnl_costs
-            total_aum_end: entityStats.assetsValue - entityStats.liabilitiesValue - (Number(pnlCosts) || 0),
+          ...(investedNum != null ? {
+            total_invested_assets: investedNum,
+            total_debt: debtNum,
+            total_aum_end: totalAumEnd,
           } : {}),
         }),
       })
@@ -1161,73 +1322,146 @@ function ClosePeriodDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Close period</DialogTitle>
-          <p className="text-sm text-muted-foreground">
-            Review and confirm the closing values. All fields are editable before locking.
+          <p className="text-xs text-muted-foreground">
+            Step {step} of 2 — {step === 1 ? "Step B: Data from financials" : "Step C: Net NAV calculation"}
           </p>
         </DialogHeader>
 
-        <div className="flex flex-col gap-3 py-1">
-          {/* ── Section: Gross NAV ─────────────────────────────────────────── */}
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Gross NAV</p>
-          <CcyField
-            id="gross-nav"
-            label="Gross NAV per share"
-            value={grossNav}
-            onChange={setGrossNav}
-            hint={grossYield != null ? <>Gross yield: <span className={grossYield >= 0 ? "text-green-600" : "text-red-600"}>{fmtPct(grossYield)}</span></> : undefined}
-          />
+        {/* ── Step 1: Data from Financials ─────────────────────────────────── */}
+        {step === 1 && (
+          <div className="flex flex-col gap-3 py-1">
+            <p className="text-[10px] font-bold tracking-wide text-slate-500 uppercase">
+              Step B — Data from financials
+            </p>
 
-          {/* ── Section: Management fee ────────────────────────────────────── */}
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Management fee</p>
-          <div className="grid grid-cols-2 gap-3">
-            <CcyField id="mgmt-fee-per-share" label="Fee per share" value={mgmtFeePerShare} onChange={setMgmtFeePerShare} />
-            <CcyField id="mgmt-fee-total" label="Fee total" value={mgmtFeeTotal} onChange={setMgmtFeeTotal} />
+            <CcyField
+              id="total-invested"
+              label="Total invested assets end of period (cash + trades)"
+              value={totalInvestedAssets}
+              onChange={setTotalInvestedAssets}
+              currencyCode={currencyCode}
+            />
+            <CcyField
+              id="total-debt"
+              label="Total debt end of period"
+              value={totalDebt}
+              onChange={setTotalDebt}
+              currencyCode={currencyCode}
+            />
+
+            <ReadRow
+              label="Asset minus liabilities end of period"
+              value={assetMinusLiabilities != null ? fmtCcy(assetMinusLiabilities, currencyCode) : "—"}
+            />
+
+            <CcyField
+              id="pnl-costs"
+              label="P&L: cost associated with the fund in period"
+              value={pnlCosts}
+              onChange={setPnlCosts}
+              currencyCode={currencyCode}
+            />
+
+            <ReadRow
+              label="Total AUM end of period"
+              value={totalAumEnd != null
+                ? <span className="text-base font-semibold">{fmtCcy(totalAumEnd, currencyCode)}</span>
+                : "—"}
+            />
+
+            <div className="border-t pt-3 flex flex-col gap-3">
+              <Field>
+                <FieldLabel htmlFor="shares-end">Total shares outstanding end of period</FieldLabel>
+                <Input id="shares-end" type="number" min="0" step="0.0001" placeholder="0" value={totalSharesEnd} onChange={(e) => setTotalSharesEnd(e.target.value)} />
+              </Field>
+              <DatePickerInput id="closed-at" label="Closing date" value={closedAt} onChange={setClosedAt} />
+              <Field>
+                <FieldLabel htmlFor="period-notes">Notes</FieldLabel>
+                <Input id="period-notes" placeholder="Optional…" value={notes} onChange={(e) => setNotes(e.target.value)} />
+              </Field>
+            </div>
+
+            {error && <FieldError>{error}</FieldError>}
           </div>
+        )}
 
-          {/* ── Section: Net NAV ───────────────────────────────────────────── */}
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Net NAV (closing)</p>
-          <CcyField
-            id="nav-end"
-            label={<>Net NAV per share <span className="text-destructive">*</span></>}
-            value={navEnd}
-            onChange={setNavEnd}
-            hint={netYield != null ? <>Net yield: <span className={netYield >= 0 ? "text-green-600" : "text-red-600"}>{fmtPct(netYield)}</span>{period.nav_start != null && navValue != null ? <> · {fmtCcy(period.nav_start, currencyCode)} → {fmtCcy(navValue, currencyCode)}</> : null}</> : undefined}
-          />
+        {/* ── Step 2: Net NAV Calculation ───────────────────────────────────── */}
+        {step === 2 && (
+          <div className="flex flex-col gap-3 py-1">
+            <p className="text-[10px] font-bold tracking-wide text-slate-500 uppercase">
+              Step C — Net NAV calculation
+            </p>
 
-          {/* ── Section: Period costs ──────────────────────────────────────── */}
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Period costs</p>
-          <CcyField
-            id="pnl-costs"
-            label="P&L costs this period"
-            value={pnlCosts}
-            onChange={setPnlCosts}
-            hint="Operational costs recorded against this period. Defaults to 0. Management fee is tracked separately above."
-          />
+            <CcyField
+              id="gross-nav"
+              label="Gross end NAV for the period"
+              value={grossNav}
+              onChange={(v) => {
+                setGrossNav(v)
+                // Auto-update net NAV when gross changes
+                const fee = mgmtFeePerShareField ? Number(mgmtFeePerShareField) : 0
+                if (v && Number(v) > 0) setNavEnd(String((Number(v) - fee).toFixed(4)))
+              }}
+              hint={grossYield != null ? <>Gross yield: <span className={grossYield >= 0 ? "text-green-600" : "text-red-600"}>{fmtPct(grossYield)}</span></> : undefined}
+              currencyCode={currencyCode}
+            />
 
-          {/* ── Section: Shares ────────────────────────────────────────────── */}
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Shares</p>
-          <Field>
-            <FieldLabel htmlFor="shares-end">Total shares at close</FieldLabel>
-            <Input id="shares-end" type="number" min="0" step="0.0001" placeholder="0" value={totalSharesEnd} onChange={(e) => setTotalSharesEnd(e.target.value)} />
-          </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <CcyField
+                id="mgmt-fee-per-share"
+                label="Management fee/share"
+                value={mgmtFeePerShareField}
+                onChange={(v) => {
+                  setMgmtFeePerShareField(v)
+                  if (grossNav && Number(grossNav) > 0)
+                    setNavEnd(String((Number(grossNav) - (v ? Number(v) : 0)).toFixed(4)))
+                }}
+                currencyCode={currencyCode}
+              />
+              <CcyField
+                id="mgmt-fee-total"
+                label="Management fee total"
+                value={mgmtFeeTotalField}
+                onChange={setMgmtFeeTotalField}
+                currencyCode={currencyCode}
+              />
+            </div>
 
-          {/* ── Closing date ───────────────────────────────────────────────── */}
-          <DatePickerInput id="closed-at" label="Closing date" value={closedAt} onChange={setClosedAt} />
+            <CcyField
+              id="nav-end"
+              label={<>Net NAV end of the period <span className="text-destructive">*</span></>}
+              value={navEnd}
+              onChange={setNavEnd}
+              hint={netYield != null ? <>Net yield: <span className={netYield >= 0 ? "text-green-600" : "text-red-600"}>{fmtPct(netYield)}</span>{period.nav_start != null && navValue != null ? <> · {fmtCcy(period.nav_start, currencyCode)} → {fmtCcy(navValue, currencyCode)}</> : null}</> : undefined}
+              currencyCode={currencyCode}
+            />
 
-          <Field>
-            <FieldLabel htmlFor="period-notes">Notes</FieldLabel>
-            <Input id="period-notes" placeholder="Optional…" value={notes} onChange={(e) => setNotes(e.target.value)} />
-          </Field>
+            <div className="rounded-md border bg-muted/30 divide-y px-3">
+              <ReadRow label="Total shares outstanding end of period" value={sharesEndNum != null ? fmt(sharesEndNum, 4) : "—"} />
+              <ReadRow label="Total AUM end of period" value={totalAumEnd != null ? fmtCcy(totalAumEnd, currencyCode) : "—"} />
+            </div>
 
-          {error && <FieldError>{error}</FieldError>}
-        </div>
+            {error && <FieldError>{error}</FieldError>}
+          </div>
+        )}
 
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
-          <Button onClick={handleConfirm} disabled={saving || !navValue}>
-            {saving ? <Spinner className="size-4 mr-2" /> : <Lock className="size-4 mr-2" />}
-            Close period
-          </Button>
+          {step === 1 ? (
+            <>
+              <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+              <Button onClick={handleNextStep}>
+                Next →
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" onClick={() => { setStep(1); setError(null) }} disabled={saving}>← Back</Button>
+              <Button onClick={handleConfirm} disabled={saving || !navValue}>
+                {saving ? <Spinner className="size-4 mr-2" /> : <Lock className="size-4 mr-2" />}
+                Close period
+              </Button>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -1239,6 +1473,7 @@ function ClosePeriodDialog({
 function PeriodCard({
   period,
   mutations,
+  cumulativeMutations,
   shareClasses,
   entityUUID,
   currencyCode,
@@ -1246,6 +1481,7 @@ function PeriodCard({
 }: {
   period: FundPeriod
   mutations: FundMutation[]
+  cumulativeMutations: FundMutation[]
   shareClasses: ShareClass[]
   entityUUID: string
   currencyCode: string
@@ -1273,7 +1509,7 @@ function PeriodCard({
   const reportingAum = navEnd != null && totalShares != null ? navEnd * totalShares : null
 
   // ── Per-investor breakdown ────────────────────────────────────────────────
-  // Aggregate net shares per cap_table_entry across all mutations in this period
+  // Aggregate net shares per cap_table_entry across all mutations up to and including this period
   type InvestorRow = {
     entryId: string
     name: string | null
@@ -1283,7 +1519,7 @@ function PeriodCard({
     totalOut: number  // amount_returned + amount_distributed
   }
   const investorMap = new Map<string, InvestorRow>()
-  for (const m of mutations) {
+  for (const m of cumulativeMutations) {
     const entryId = m.cap_table_entry ?? m._cap_table_entry?.id ?? null
     if (!entryId) continue
     if (!investorMap.has(entryId)) {
@@ -1486,6 +1722,1047 @@ function PeriodCard({
   )
 }
 
+// ─── Distribution Step ────────────────────────────────────────────────────────
+
+function DistributionStep({
+  positions, shareClasses, lastNavEnd, currencyCode, entityUUID, existingDistributions, defaultDate, onDone, onSkip,
+}: {
+  positions: InvestorPosition[]
+  shareClasses: ShareClass[]
+  lastNavEnd: number | null
+  currencyCode: string
+  entityUUID: string
+  existingDistributions?: Record<string, { amount: number; mutationId: string; payoutId: string }>
+  defaultDate?: Date
+  onDone: () => void
+  onSkip: () => void
+}) {
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+  const [mutationAt, setMutationAt] = React.useState<Date | undefined>(defaultDate ?? new Date())
+  // Track which entries already have recorded IDs (for PATCH vs POST)
+  const [recordedIds, setRecordedIds] = React.useState<Record<string, { mutationId: string; payoutId: string }>>({})
+
+  // Compute suggested amount from distribution schemes per investor
+  const scMap = new Map(shareClasses.map((sc) => [sc.id, sc]))
+  function computeSuggested(pos: InvestorPosition): number {
+    const sc = pos.shareClass ? scMap.get(pos.shareClass) : null
+    const schemes = (sc?._share_class_distribution ?? []).filter((d) => d.enabled !== false)
+    let total = 0
+    for (const s of schemes) {
+      if (s.basis === "nav" && s.rate != null && lastNavEnd != null)
+        total += (s.rate / 100) * pos.netShares * lastNavEnd
+      else if (s.basis === "committed_capital" && s.rate != null && pos.committedAmount != null)
+        total += (s.rate / 100) * pos.committedAmount
+      else if (s.basis === "fixed" && s.fixed_amount != null)
+        total += s.fixed_amount * pos.netShares
+    }
+    return total
+  }
+
+  // Editable amounts — initialised from scheme suggestions (or blank)
+  const [amounts, setAmounts] = React.useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {}
+    for (const pos of positions) {
+      const suggested = computeSuggested(pos)
+      init[pos.entryId] = suggested > 0 ? String(suggested.toFixed(2)) : ""
+    }
+    return init
+  })
+
+  // Sync from existingDistributions when it loads asynchronously
+  React.useEffect(() => {
+    if (!existingDistributions || Object.keys(existingDistributions).length === 0) return
+    setAmounts((prev) => {
+      const next = { ...prev }
+      for (const [entryId, { amount }] of Object.entries(existingDistributions)) {
+        next[entryId] = String(amount)
+      }
+      return next
+    })
+    setRecordedIds(Object.fromEntries(
+      Object.entries(existingDistributions).map(([entryId, { mutationId, payoutId }]) => [entryId, { mutationId, payoutId }])
+    ))
+  }, [existingDistributions])
+
+  const toSave = positions.filter((p) => amounts[p.entryId] && Number(amounts[p.entryId]) > 0)
+  const allRecorded = positions.length > 0 && positions.every((p) => recordedIds[p.entryId] != null)
+
+  async function handleAddDistributions() {
+    if (toSave.length === 0) { onDone(); return }
+    setSaving(true); setError(null)
+    const declaredAt = mutationAt?.getTime() ?? Date.now()
+    try {
+      const newIds: Record<string, { mutationId: string; payoutId: string }> = {}
+      await Promise.all(
+        toSave.map(async (pos) => {
+          const amount = Number(amounts[pos.entryId])
+          const existing = recordedIds[pos.entryId]
+          if (existing) {
+            // PATCH existing mutation and payout
+            await Promise.all([
+              fetch(`/api/fund-mutations/${existing.mutationId}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ amount_distributed: amount }),
+              }),
+              fetch(`/api/fund-payouts/${existing.payoutId}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ amount }),
+              }),
+            ])
+            newIds[pos.entryId] = existing
+          } else {
+            // POST new mutation and payout
+            const mutRes = await fetch("/api/fund-mutations", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                entity: entityUUID,
+                cap_table_entry: pos.entryId,
+                type: "distribution",
+                amount_distributed: amount,
+                ...(lastNavEnd != null ? { nav_per_share: lastNavEnd } : {}),
+                mutation_at: declaredAt,
+              }),
+            })
+            if (!mutRes.ok) throw new Error("Failed to create mutation")
+            const mutation: { id: string } = await mutRes.json()
+            const payoutRes = await fetch("/api/fund-payouts", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                entity: entityUUID,
+                fund_mutation: mutation.id,
+                cap_table_entry: pos.entryId,
+                type: "distribution",
+                amount,
+                nav_at_declaration: lastNavEnd ?? null,
+                status: "pending",
+                declared_at: declaredAt,
+              }),
+            })
+            if (!payoutRes.ok) throw new Error("Failed to create payout record")
+            const payout: { id: string } = await payoutRes.json()
+            newIds[pos.entryId] = { mutationId: mutation.id, payoutId: payout.id }
+          }
+        })
+      )
+      setRecordedIds((prev) => ({ ...prev, ...newIds }))
+      onDone()
+    } catch {
+      setError("Failed to save distribution mutations.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (positions.length === 0) {
+    return (
+      <div className="flex flex-col items-center gap-3 py-10 text-center">
+        <p className="text-sm text-muted-foreground">No active investors to distribute to.</p>
+        <Button variant="outline" size="sm" onClick={onSkip}>Skip distributions →</Button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="rounded-xl border overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/30 border-b">
+            <tr>
+              <th className="text-left py-2 px-4 text-xs font-medium text-muted-foreground">Investor</th>
+              <th className="text-right py-2 px-3 text-xs font-medium text-muted-foreground">Shares</th>
+              <th className="text-right py-2 px-3 text-xs font-medium text-muted-foreground">Current value</th>
+              <th className="text-right py-2 px-3 text-xs font-medium text-muted-foreground">Distribution amount</th>
+              <th className="text-right py-2 px-4 text-xs font-medium text-muted-foreground">Value after dist.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {positions.map((pos) => {
+              const amount = amounts[pos.entryId] ? Number(amounts[pos.entryId]) : 0
+              const currentValue = lastNavEnd != null ? pos.netShares * lastNavEnd : null
+              const valueAfterDist = currentValue != null && amount > 0 ? currentValue - amount : currentValue
+              return (
+                <tr key={pos.entryId} className="border-b last:border-0">
+                  <td className="py-2.5 px-4">
+                    <div className="font-medium">{pos.name ?? "—"}</div>
+                    {pos.email && <div className="text-xs text-muted-foreground">{pos.email}</div>}
+                  </td>
+                  <td className="py-2.5 px-3 text-right tabular-nums">{fmt(pos.netShares, 4)}</td>
+                  <td className="py-2.5 px-3 text-right tabular-nums">
+                    {currentValue != null ? fmtCcy(currentValue, currencyCode) : "—"}
+                  </td>
+                  <td className="py-2.5 px-3">
+                    <div className="flex flex-col items-end gap-0.5">
+                      <Input
+                        type="number" min="0" step="0.01" placeholder="0.00"
+                        className="w-36 h-7 text-right text-sm"
+                        value={amounts[pos.entryId] ?? ""}
+                        onChange={(e) => setAmounts((prev) => ({ ...prev, [pos.entryId]: e.target.value }))}
+                      />
+                      {amount > 0 && (
+                        <span className="text-[10px] text-blue-600 tabular-nums">−{fmtCcy(amount, currencyCode)}</span>
+                      )}
+                      {recordedIds[pos.entryId] != null && (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600 font-medium">
+                          <svg className="size-3" viewBox="0 0 12 12" fill="currentColor"><path d="M10 3L5 8.5 2 5.5l-.7.7L5 10l5.7-6.3z"/></svg>
+                          Recorded
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="py-2.5 px-4 text-right tabular-nums font-medium">
+                    {valueAfterDist != null ? fmtCcy(valueAfterDist, currencyCode) : "—"}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+          {positions.length > 0 && (
+            <tfoot className="border-t bg-muted/20">
+              <tr>
+                <td className="py-2 px-4 text-xs font-semibold">Total</td>
+                <td className="py-2 px-3 text-right tabular-nums text-xs font-semibold">
+                  {fmt(positions.reduce((s, p) => s + p.netShares, 0), 4)}
+                </td>
+                <td className="py-2 px-3 text-right tabular-nums text-xs font-semibold">
+                  {lastNavEnd != null ? fmtCcy(positions.reduce((s, p) => s + p.netShares * lastNavEnd, 0), currencyCode) : "—"}
+                </td>
+                <td className="py-2 px-3 text-right tabular-nums text-xs font-semibold text-blue-600">
+                  {(() => {
+                    const total = positions.reduce((s, p) => s + (amounts[p.entryId] ? Number(amounts[p.entryId]) : 0), 0)
+                    return total > 0 ? `−${fmtCcy(total, currencyCode)}` : "—"
+                  })()}
+                </td>
+                <td className="py-2 px-4 text-right tabular-nums text-xs font-semibold">
+                  {lastNavEnd != null ? fmtCcy(positions.reduce((s, p) => {
+                    const val = p.netShares * lastNavEnd
+                    const dist = amounts[p.entryId] ? Number(amounts[p.entryId]) : 0
+                    return s + (dist > 0 ? val - dist : val)
+                  }, 0), currencyCode) : "—"}
+                </td>
+              </tr>
+            </tfoot>
+          )}
+        </table>
+      </div>
+      <div className="flex items-end gap-4">
+        <DatePickerInput id="dist-date" label="Distribution date" value={mutationAt} onChange={setMutationAt} />
+      </div>
+      {error && <FieldError>{error}</FieldError>}
+      <div className="flex items-center justify-between">
+        <Button variant="ghost" onClick={onSkip} disabled={saving}>Skip distributions →</Button>
+        <Button onClick={handleAddDistributions} disabled={saving}>
+          {saving && <Spinner className="size-4 mr-2" />}
+          {toSave.length === 0 ? "No distributions — Next →" : allRecorded ? `Update distributions (${toSave.length})` : `Save distributions (${toSave.length})`}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+// ─── Transfer Dialog ──────────────────────────────────────────────────────────
+
+function TransferDialog({
+  open, onClose, seller, recipients, lastNavEnd, currencyCode, entityUUID, onSuccess,
+}: {
+  open: boolean
+  onClose: () => void
+  seller: InvestorPosition
+  recipients: InvestorPosition[]
+  lastNavEnd: number | null
+  currencyCode: string
+  entityUUID: string
+  onSuccess: () => void
+}) {
+  const [recipientId, setRecipientId] = React.useState("")
+  const [sharesToTransfer, setSharesToTransfer] = React.useState(String(seller.netShares))
+  const [mutationAt, setMutationAt] = React.useState<Date | undefined>(new Date())
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    if (open) { setRecipientId(""); setSharesToTransfer(String(seller.netShares)); setError(null) }
+  }, [open, seller.netShares])
+
+  const shares = sharesToTransfer ? Number(sharesToTransfer) : 0
+  const nav = lastNavEnd ?? 0
+  const amount = shares * nav
+
+  async function handleTransfer() {
+    if (!recipientId) { setError("Select a recipient."); return }
+    if (!shares || shares <= 0) { setError("Enter shares to transfer."); return }
+    if (shares > seller.netShares) { setError("Cannot transfer more shares than held."); return }
+    setSaving(true); setError(null)
+    try {
+      const ts = mutationAt?.getTime() ?? Date.now()
+      const recipientName = recipients.find((r) => r.entryId === recipientId)?.name ?? "investor"
+      await fetch("/api/fund-mutations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entity: entityUUID, cap_table_entry: seller.entryId, type: "redemption",
+          shares_redeemed: shares, amount_returned: amount, nav_per_share: nav,
+          mutation_at: ts, notes: `Transfer to ${recipientName}`,
+        }),
+      })
+      await fetch("/api/fund-mutations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          entity: entityUUID, cap_table_entry: recipientId, type: "subscription",
+          shares_issued: shares, amount_invested: amount, amount_for_shares: amount, nav_per_share: nav,
+          mutation_at: ts, notes: `Transfer from ${seller.name ?? "investor"}`,
+        }),
+      })
+      onSuccess()
+      onClose()
+    } catch {
+      setError("Failed to create transfer mutations.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v && !saving) onClose() }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Transfer shares</DialogTitle>
+          <p className="text-sm text-muted-foreground">
+            Redeem from <span className="font-medium">{seller.name ?? "—"}</span> and subscribe to another investor.
+          </p>
+        </DialogHeader>
+        <div className="flex flex-col gap-3 py-1">
+          <div className="rounded-lg border p-3 bg-muted/30 text-sm flex flex-col gap-1">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Available shares</span>
+              <span className="font-medium">{fmt(seller.netShares, 4)}</span>
+            </div>
+            {lastNavEnd != null && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Current value</span>
+                <span className="font-medium">{fmtCcy(seller.netShares * lastNavEnd, currencyCode)}</span>
+              </div>
+            )}
+          </div>
+          <Field>
+            <FieldLabel htmlFor="transfer-recipient">Transfer to</FieldLabel>
+            <select
+              id="transfer-recipient"
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+              value={recipientId}
+              onChange={(e) => setRecipientId(e.target.value)}
+            >
+              <option value="">Select investor…</option>
+              {recipients.map((r) => (
+                <option key={r.entryId} value={r.entryId}>{r.name ?? r.entryId}</option>
+              ))}
+            </select>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor="transfer-shares">Shares to transfer</FieldLabel>
+            <Input
+              id="transfer-shares" type="number" min="0" max={seller.netShares} step="0.0001"
+              value={sharesToTransfer} onChange={(e) => setSharesToTransfer(e.target.value)}
+            />
+          </Field>
+          {shares > 0 && lastNavEnd != null && (
+            <div className="rounded-lg border p-3 bg-muted/30 text-sm flex justify-between">
+              <span className="text-muted-foreground">Transfer value</span>
+              <span className="font-medium">{fmtCcy(amount, currencyCode)}</span>
+            </div>
+          )}
+          <DatePickerInput id="transfer-date" label="Transfer date" value={mutationAt} onChange={setMutationAt} />
+          {error && <FieldError>{error}</FieldError>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={handleTransfer} disabled={saving || !recipientId || shares <= 0}>
+            {saving && <Spinner className="size-4 mr-2" />}
+            Transfer
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ─── Redemption Step ──────────────────────────────────────────────────────────
+
+function RedemptionStep({
+  positions, shareClasses, lastNavEnd, currencyCode, entityUUID, existingRedemptions, defaultDate, onDone, onSkip, onMutated,
+}: {
+  positions: InvestorPosition[]
+  shareClasses: ShareClass[]
+  lastNavEnd: number | null
+  currencyCode: string
+  entityUUID: string
+  existingRedemptions?: Array<{ entryId: string; name: string | null; email: string | null; sharesRedeemed: number; amount: number; mutationId: string; payoutId: string }>
+  defaultDate?: Date
+  onDone: () => void
+  onSkip: () => void
+  onMutated: () => void
+}) {
+  const [redemptions, setRedemptions] = React.useState<Record<string, string>>({})
+  const [recordedIds, setRecordedIds] = React.useState<Record<string, { mutationId: string; payoutId: string }>>({})
+  const [mutationAt, setMutationAt] = React.useState<Date | undefined>(defaultDate ?? new Date())
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+  const [transferSeller, setTransferSeller] = React.useState<InvestorPosition | null>(null)
+
+  // Sync from existingRedemptions when it loads asynchronously
+  React.useEffect(() => {
+    if (!existingRedemptions || existingRedemptions.length === 0) return
+    setRedemptions((prev) => {
+      const next = { ...prev }
+      for (const r of existingRedemptions) {
+        next[r.entryId] = String(r.sharesRedeemed)
+      }
+      return next
+    })
+    setRecordedIds(Object.fromEntries(
+      existingRedemptions.map((r) => [r.entryId, { mutationId: r.mutationId, payoutId: r.payoutId }])
+    ))
+  }, [existingRedemptions])
+
+  const scMap = React.useMemo(() => new Map(shareClasses.map((sc) => [sc.id, sc])), [shareClasses])
+  const navForPosition = React.useCallback((pos: InvestorPosition) => {
+    const sc = pos.shareClass ? scMap.get(pos.shareClass) : null
+    return sc?.current_nav ?? lastNavEnd ?? 0
+  }, [scMap, lastNavEnd])
+
+  const toSave = positions.filter((p) => redemptions[p.entryId] && Number(redemptions[p.entryId]) > 0)
+
+  async function handleRedemptions() {
+    if (toSave.length === 0) { onDone(); return }
+    setSaving(true); setError(null)
+    const redeemedAt = mutationAt?.getTime() ?? Date.now()
+    try {
+      const newIds: Record<string, { mutationId: string; payoutId: string }> = {}
+      await Promise.all(
+        toSave.map(async (p) => {
+          const nav = navForPosition(p)
+          const shares = Number(redemptions[p.entryId])
+          const amount = shares * nav
+          const existing = recordedIds[p.entryId]
+          if (existing) {
+            await Promise.all([
+              fetch(`/api/fund-mutations/${existing.mutationId}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ shares_redeemed: shares, amount_returned: amount }),
+              }),
+              fetch(`/api/fund-payouts/${existing.payoutId}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ shares_redeemed: shares, amount }),
+              }),
+            ])
+            newIds[p.entryId] = existing
+          } else {
+            const mutRes = await fetch("/api/fund-mutations", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                entity: entityUUID, cap_table_entry: p.entryId, type: "redemption",
+                shares_redeemed: shares, amount_returned: amount, nav_per_share: nav,
+                mutation_at: redeemedAt,
+              }),
+            })
+            if (!mutRes.ok) throw new Error("Failed to create mutation")
+            const mutation: { id: string } = await mutRes.json()
+            const payoutRes = await fetch("/api/fund-payouts", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                entity: entityUUID, fund_mutation: mutation.id, cap_table_entry: p.entryId,
+                type: "redemption", amount, nav_at_declaration: nav, shares_redeemed: shares,
+                status: "pending", declared_at: redeemedAt,
+              }),
+            })
+            if (!payoutRes.ok) throw new Error("Failed to create payout record")
+            const payout: { id: string } = await payoutRes.json()
+            newIds[p.entryId] = { mutationId: mutation.id, payoutId: payout.id }
+          }
+        })
+      )
+      setRecordedIds((prev) => ({ ...prev, ...newIds }))
+      onDone()
+    } catch {
+      setError("Failed to save redemption mutations.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Build unified row list: active positions + fully-redeemed investors (not in positions)
+  const existingRedemptionMap = React.useMemo(() => new Map((existingRedemptions ?? []).map((r) => [r.entryId, r])), [existingRedemptions])
+  const activeEntryIds = React.useMemo(() => new Set(positions.map((p) => p.entryId)), [positions])
+  const fullyRedeemedRows = (existingRedemptions ?? []).filter((r) => !activeEntryIds.has(r.entryId))
+  const allRows = positions.length === 0 && fullyRedeemedRows.length === 0
+
+  if (allRows) {
+    return (
+      <div className="flex flex-col items-center gap-3 py-10 text-center">
+        <p className="text-sm text-muted-foreground">No active investors to redeem.</p>
+        <Button variant="outline" size="sm" onClick={onSkip}>Skip redemptions →</Button>
+      </div>
+    )
+  }
+
+  // Footer totals — redemptions state is always pre-filled so no need to also sum existingRedemptions
+  const totalActiveShares = positions.reduce((s, p) => s + p.netShares, 0)
+  const totalActiveValue = positions.reduce((s, p) => s + p.netShares * navForPosition(p), 0)
+  const totalRedeemedShares = positions.reduce((s, p) => s + (redemptions[p.entryId] ? Number(redemptions[p.entryId]) : 0), 0)
+    + fullyRedeemedRows.reduce((s, r) => s + r.sharesRedeemed, 0)
+  const totalRedeemedValue = positions.reduce((s, p) => { const sh = redemptions[p.entryId] ? Number(redemptions[p.entryId]) : 0; return s + sh * navForPosition(p) }, 0)
+    + fullyRedeemedRows.reduce((s, r) => s + r.amount, 0)
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="rounded-xl border overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/30 border-b">
+            <tr>
+              <th className="text-left py-2 px-4 text-xs font-medium text-muted-foreground">Investor</th>
+              <th className="text-right py-2 px-3 text-xs font-medium text-muted-foreground">Shares</th>
+              <th className="text-right py-2 px-3 text-xs font-medium text-muted-foreground">Current value</th>
+              <th className="text-right py-2 px-3 text-xs font-medium text-muted-foreground">Shares to redeem</th>
+              <th className="text-right py-2 px-3 text-xs font-medium text-muted-foreground">Shares after red.</th>
+              <th className="text-right py-2 px-4 text-xs font-medium text-muted-foreground">Value after red.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {positions.map((p) => {
+              const nav = navForPosition(p)
+              const value = nav > 0 ? p.netShares * nav : null
+              const isRecorded = !!recordedIds[p.entryId]
+              const redeemedShares = redemptions[p.entryId] ? Number(redemptions[p.entryId]) : 0
+              const sharesAfter = p.netShares - redeemedShares
+              const valueAfter = nav > 0 ? sharesAfter * nav : null
+              const redeemValue = redeemedShares > 0 ? redeemedShares * nav : null
+              return (
+                <tr key={p.entryId} className="border-b last:border-0">
+                  <td className="py-2.5 px-4">
+                    <div className="font-medium">{p.name ?? "—"}</div>
+                    {p.email && <div className="text-xs text-muted-foreground">{p.email}</div>}
+                  </td>
+                  <td className="py-2.5 px-3 text-right tabular-nums">{fmt(p.netShares, 4)}</td>
+                  <td className="py-2.5 px-3 text-right tabular-nums">{value != null ? fmtCcy(value, currencyCode) : "—"}</td>
+                  <td className="py-2.5 px-3">
+                    <div className="flex flex-col items-end gap-0.5">
+                      <Input
+                        type="number" min="0" max={p.netShares} step="0.0001" placeholder="0"
+                        className="w-32 h-7 text-right text-sm"
+                        value={redemptions[p.entryId] ?? ""}
+                        onChange={(e) => setRedemptions((prev) => ({ ...prev, [p.entryId]: e.target.value }))}
+                      />
+                      {redeemValue != null && redeemValue > 0 && (
+                        <span className="text-[10px] text-red-600 tabular-nums">−{fmtCcy(redeemValue, currencyCode)}</span>
+                      )}
+                      {isRecorded && (
+                        <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600 font-medium">
+                          <svg className="size-3" viewBox="0 0 12 12" fill="currentColor"><path d="M10 3L5 8.5 2 5.5l-.7.7L5 10l5.7-6.3z"/></svg>
+                          Recorded
+                        </span>
+                      )}
+                      {!isRecorded && (
+                        <button className="text-[10px] text-muted-foreground hover:text-foreground underline-offset-2 underline" onClick={() => setTransferSeller(p)}>
+                          Transfer →
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                  <td className="py-2.5 px-3 text-right tabular-nums font-medium">
+                    {redeemedShares > 0 ? fmt(sharesAfter, 4) : "—"}
+                  </td>
+                  <td className="py-2.5 px-4 text-right tabular-nums font-medium">
+                    {redeemedShares > 0 && valueAfter != null ? fmtCcy(valueAfter, currencyCode) : "—"}
+                  </td>
+                </tr>
+              )
+            })}
+            {fullyRedeemedRows.map((r) => (
+              <tr key={`recorded-${r.entryId}`} className="border-b last:border-0">
+                <td className="py-2.5 px-4">
+                  <div className="font-medium">{r.name ?? "—"}</div>
+                  {r.email && <div className="text-xs text-muted-foreground">{r.email}</div>}
+                </td>
+                <td className="py-2.5 px-3 text-right tabular-nums text-muted-foreground">—</td>
+                <td className="py-2.5 px-3 text-right tabular-nums text-muted-foreground">—</td>
+                <td className="py-2.5 px-3">
+                  <div className="flex flex-col items-end gap-0.5">
+                    <span className="tabular-nums font-medium text-sm">{fmt(r.sharesRedeemed, 4)}</span>
+                    <span className="text-[10px] text-red-600 tabular-nums">−{fmtCcy(r.amount, currencyCode)}</span>
+                    <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600 font-medium">
+                      <svg className="size-3" viewBox="0 0 12 12" fill="currentColor"><path d="M10 3L5 8.5 2 5.5l-.7.7L5 10l5.7-6.3z"/></svg>
+                      Recorded
+                    </span>
+                  </div>
+                </td>
+                <td className="py-2.5 px-3 text-right tabular-nums font-medium">0</td>
+                <td className="py-2.5 px-4 text-right tabular-nums font-medium">{fmtCcy(0, currencyCode)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot className="border-t bg-muted/20">
+            <tr>
+              <td className="py-2 px-4 text-xs font-semibold">Total</td>
+              <td className="py-2 px-3 text-right text-xs tabular-nums font-semibold">{fmt(totalActiveShares, 4)}</td>
+              <td className="py-2 px-3 text-right text-xs tabular-nums font-semibold">{fmtCcy(totalActiveValue, currencyCode)}</td>
+              <td className="py-2 px-3 text-right text-xs tabular-nums font-semibold">
+                {totalRedeemedShares > 0 ? (
+                  <div className="flex flex-col items-end gap-0.5">
+                    <span>{fmt(totalRedeemedShares, 4)}</span>
+                    <span className="text-red-600">−{fmtCcy(totalRedeemedValue, currencyCode)}</span>
+                  </div>
+                ) : "—"}
+              </td>
+              <td className="py-2 px-3 text-right text-xs tabular-nums font-semibold">
+                {totalRedeemedShares > 0 ? fmt(totalActiveShares - totalRedeemedShares, 4) : "—"}
+              </td>
+              <td className="py-2 px-4 text-right text-xs tabular-nums font-semibold">
+                {totalRedeemedShares > 0 ? fmtCcy(totalActiveValue - totalRedeemedValue, currencyCode) : "—"}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <div className="flex items-end gap-4">
+        <DatePickerInput id="red-date" label="Redemption date" value={mutationAt} onChange={setMutationAt} />
+      </div>
+      {error && <FieldError>{error}</FieldError>}
+      <div className="flex items-center justify-between">
+        <Button variant="ghost" onClick={onSkip} disabled={saving}>Skip redemptions →</Button>
+        <Button onClick={handleRedemptions} disabled={saving}>
+          {saving && <Spinner className="size-4 mr-2" />}
+          {toSave.length === 0 ? "No redemptions — Next →" : Object.keys(recordedIds).length > 0 ? `Update redemptions (${toSave.length})` : `Save redemptions (${toSave.length})`}
+        </Button>
+      </div>
+      {transferSeller && (
+        <TransferDialog
+          open
+          onClose={() => setTransferSeller(null)}
+          seller={transferSeller}
+          recipients={positions.filter((p) => p.entryId !== transferSeller.entryId)}
+          lastNavEnd={lastNavEnd}
+          currencyCode={currencyCode}
+          entityUUID={entityUUID}
+          onSuccess={() => { setTransferSeller(null); onMutated() }}
+        />
+      )}
+    </div>
+  )
+}
+
+// ─── Open Period Step ─────────────────────────────────────────────────────────
+
+function OpenPeriodStep({
+  lastClosedPeriod, pendingMutations, existingDistributions, existingRedemptions, currencyCode, onOpenPeriod,
+}: {
+  lastClosedPeriod: FundPeriod | null
+  pendingMutations: FundMutation[]
+  existingDistributions: Record<string, { amount: number; mutationId: string; payoutId: string }>
+  existingRedemptions: Array<{ entryId: string; name: string | null; sharesRedeemed: number; amount: number; mutationId: string; payoutId: string }>
+  currencyCode: string
+  onOpenPeriod: () => void
+}) {
+  const navEnd = lastClosedPeriod?.nav_end ?? null
+  const sharesEnd = lastClosedPeriod?.total_shares_end ?? null
+  const aumEnd = sharesEnd != null && navEnd != null ? sharesEnd * navEnd : lastClosedPeriod?.total_aum_end ?? null
+
+  const pendingSubs = pendingMutations.filter((m) => m.type === "subscription")
+  const totalDistributed = Object.values(existingDistributions).reduce((s, v) => s + v.amount, 0)
+  const totalRedeemedShares = existingRedemptions.reduce((s, r) => s + r.sharesRedeemed, 0)
+  const totalRedeemedAmount = existingRedemptions.reduce((s, r) => s + r.amount, 0)
+  const totalSubShares = pendingSubs.reduce((s, m) => s + (m.shares_issued ?? 0), 0)
+  const totalSubAmount = pendingSubs.reduce((s, m) => s + (m.amount_for_shares ?? 0), 0)
+
+  const newShares = sharesEnd != null ? sharesEnd - totalRedeemedShares + totalSubShares : null
+  const newAum = aumEnd != null ? aumEnd - totalDistributed - totalRedeemedAmount + totalSubAmount : null
+
+  const rows: Array<{ label: string; shares: number | null; amount: number | null; color?: string }> = [
+    { label: `End of ${lastClosedPeriod?.label ?? "last period"}`, shares: sharesEnd, amount: aumEnd },
+  ]
+  if (totalDistributed > 0)
+    rows.push({ label: "Distributions paid", shares: null, amount: -totalDistributed, color: "text-amber-600" })
+  if (totalRedeemedShares > 0)
+    rows.push({ label: `Redemptions (${existingRedemptions.length} investor${existingRedemptions.length !== 1 ? "s" : ""})`, shares: -totalRedeemedShares, amount: -totalRedeemedAmount, color: "text-red-600" })
+  if (totalSubShares > 0)
+    rows.push({ label: `New subscriptions (${pendingSubs.length} investor${pendingSubs.length !== 1 ? "s" : ""})`, shares: totalSubShares, amount: totalSubAmount, color: "text-emerald-600" })
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="rounded-xl border overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-muted/30 border-b">
+            <tr>
+              <th className="text-left py-2 px-4 text-xs font-medium text-muted-foreground">Item</th>
+              <th className="text-right py-2 px-3 text-xs font-medium text-muted-foreground">Shares</th>
+              <th className="text-right py-2 px-4 text-xs font-medium text-muted-foreground">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => (
+              <tr key={i} className="border-b last:border-0">
+                <td className={["py-2.5 px-4 font-medium", row.color ?? ""].join(" ")}>{row.label}</td>
+                <td className={["py-2.5 px-3 text-right tabular-nums", row.color ?? "text-foreground"].join(" ")}>
+                  {row.shares != null ? (row.shares >= 0 ? fmt(row.shares, 4) : `−${fmt(Math.abs(row.shares), 4)}`) : "—"}
+                </td>
+                <td className={["py-2.5 px-4 text-right tabular-nums", row.color ?? "text-foreground"].join(" ")}>
+                  {row.amount != null ? (row.amount >= 0 ? fmtCcy(row.amount, currencyCode) : `−${fmtCcy(Math.abs(row.amount), currencyCode)}`) : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot className="border-t bg-muted/20">
+            <tr>
+              <td className="py-2.5 px-4 text-sm font-semibold">Opening position</td>
+              <td className="py-2.5 px-3 text-right tabular-nums font-semibold">
+                {newShares != null ? fmt(newShares, 4) : "—"}
+              </td>
+              <td className="py-2.5 px-4 text-right tabular-nums font-semibold">
+                {newAum != null ? fmtCcy(newAum, currencyCode) : "—"}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      {(totalDistributed === 0 && totalRedeemedShares === 0 && totalSubShares === 0) && (
+        <p className="text-xs text-muted-foreground text-center">No mutations recorded — opening period from last period values.</p>
+      )}
+      <div className="flex justify-end">
+        <Button onClick={onOpenPeriod}>
+          <Plus className="size-3.5 mr-1.5" />
+          Open period
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+// ─── Mutation Workflow ────────────────────────────────────────────────────────
+
+function MutationWorkflow({
+  entityUUID, currencyCode, lastClosedPeriod, allMutations, pendingMutations,
+  shareClasses, capTableEntries, undeployedCalls, onRefresh, onOpenPeriod,
+}: {
+  entityUUID: string
+  currencyCode: string
+  lastClosedPeriod: FundPeriod | null
+  allMutations: FundMutation[]
+  pendingMutations: FundMutation[]
+  shareClasses: ShareClass[]
+  capTableEntries: CapTableEntry[]
+  undeployedCalls: Array<{ call: CapitalCall; entry: CapTableEntry }>
+  onRefresh: () => void
+  onOpenPeriod: () => void
+}) {
+  const [activeStep, setActiveStep] = React.useState<1 | 2 | 3 | 4>(1)
+  const [step1Done, setStep1Done] = React.useState(false)
+  const [step2Done, setStep2Done] = React.useState(false)
+  const [step3Done, setStep3Done] = React.useState(false)
+  const [deployCall, setDeployCall] = React.useState<{ call: CapitalCall; entry: CapTableEntry } | null>(null)
+  const [subscribeAllOpen, setSubscribeAllOpen] = React.useState(false)
+  type ExistingDist = { amount: number; mutationId: string; payoutId: string }
+  type ExistingRed = { entryId: string; name: string | null; email: string | null; sharesRedeemed: number; amount: number; mutationId: string; payoutId: string }
+  const [existingDistributions, setExistingDistributions] = React.useState<Record<string, ExistingDist>>({})
+  const [existingRedemptions, setExistingRedemptions] = React.useState<ExistingRed[]>([])
+
+  const lastNavEnd = lastClosedPeriod?.nav_end ?? null
+
+  // Smart default mutation date = day after last period closed (or today)
+  const defaultMutationDate = React.useMemo(() => {
+    if (lastClosedPeriod?.closed_at) {
+      const d = new Date(lastClosedPeriod.closed_at)
+      d.setDate(d.getDate() + 1)
+      return d
+    }
+    return new Date()
+  }, [lastClosedPeriod?.closed_at])
+
+  const positions = React.useMemo(
+    () => computeCurrentPositions(allMutations, capTableEntries),
+    [allMutations, capTableEntries]
+  )
+
+  // On mount, check for existing pending payouts — pre-populate recorded state
+  // Only include payouts linked to mutations in the current pending workflow (not prior periods)
+  const pendingMutationIds = React.useMemo(
+    () => new Set(pendingMutations.map((m) => m.id)),
+    [pendingMutations]
+  )
+
+  React.useEffect(() => {
+    fetch(`/api/fund-payouts?entity=${entityUUID}&status=pending`)
+      .then((r) => r.ok ? r.json() : [])
+      .then((payouts: Array<{
+        id?: string | null
+        fund_mutation?: string | null
+        cap_table_entry?: string | null
+        amount?: number | null
+        type?: string | null
+        shares_redeemed?: number | null
+        _cap_table_entry?: { _shareholder?: { name?: string | null; email?: string | null } | null } | null
+      }>) => {
+        const distMap: Record<string, ExistingDist> = {}
+        const redemptionList: ExistingRed[] = []
+        for (const p of payouts) {
+          if (!p.id || !p.fund_mutation || !p.cap_table_entry) continue
+          // Only consider payouts tied to the current pending mutations cycle
+          if (!pendingMutationIds.has(p.fund_mutation)) continue
+          if (p.type === "distribution" && p.amount != null) {
+            distMap[p.cap_table_entry] = { amount: p.amount, mutationId: p.fund_mutation, payoutId: p.id }
+          } else if (p.type === "redemption" && p.amount != null) {
+            redemptionList.push({
+              entryId: p.cap_table_entry,
+              name: p._cap_table_entry?._shareholder?.name ?? null,
+              email: p._cap_table_entry?._shareholder?.email ?? null,
+              sharesRedeemed: p.shares_redeemed ?? 0,
+              amount: p.amount,
+              mutationId: p.fund_mutation,
+              payoutId: p.id,
+            })
+          }
+        }
+        setExistingDistributions(distMap)
+        setExistingRedemptions(redemptionList)
+        if (redemptionList.length > 0) {
+          setStep2Done(true)
+        }
+      })
+      .catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entityUUID, pendingMutationIds])
+
+  // Auto-advance past step 1 once we know all positions are covered by existing payouts
+  React.useEffect(() => {
+    if (positions.length > 0 && positions.every((pos) => existingDistributions[pos.entryId]?.amount != null)) {
+      setStep1Done(true)
+      setActiveStep((prev) => (prev === 1 ? 2 : prev))
+    }
+  }, [existingDistributions, positions])
+
+  const pendingSubs = pendingMutations.filter((m) => m.type === "subscription")
+
+  if (capTableEntries.length === 0) {
+    return (
+      <div className="rounded-xl border p-6 flex flex-col items-center gap-2 text-center">
+        <p className="text-sm font-medium">No investors yet</p>
+        <p className="text-xs text-muted-foreground">Add investors to your fund before opening a period.</p>
+      </div>
+    )
+  }
+
+  const steps = [
+    { id: 1 as const, label: "Distributions", done: step1Done },
+    { id: 2 as const, label: "Redemptions", done: step2Done },
+    { id: 3 as const, label: "Subscriptions", done: step3Done },
+    { id: 4 as const, label: "Open period" },
+  ]
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Step tabs */}
+      <div className="flex rounded-lg border overflow-hidden text-sm">
+        {steps.map((s, i) => {
+          const isActive = activeStep === s.id
+          const isDisabled = (s.id === 2 && !step1Done) || (s.id === 3 && !step2Done) || (s.id === 4 && !step3Done)
+          const isDone = s.id === 1 ? step1Done : s.id === 2 ? step2Done : s.id === 3 ? step3Done : false
+          return (
+            <button
+              key={s.id}
+              disabled={isDisabled}
+              onClick={() => { if (!isDisabled) setActiveStep(s.id) }}
+              className={[
+                "flex-1 flex items-center justify-center gap-2 px-4 py-3 font-medium transition-colors",
+                i > 0 ? "border-l" : "",
+                isActive ? "bg-foreground text-background" : "bg-background text-foreground hover:bg-muted/50",
+                isDisabled ? "opacity-40 cursor-not-allowed" : "cursor-pointer",
+              ].join(" ")}
+            >
+              <span className={[
+                "inline-flex items-center justify-center size-5 rounded-full text-xs font-bold shrink-0",
+                isDone ? "bg-emerald-500 text-white" : isActive ? "bg-background/20 text-inherit" : "bg-muted text-muted-foreground",
+              ].join(" ")}>
+                {isDone ? "✓" : s.id}
+              </span>
+              {s.label}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Step content */}
+      <div className="min-h-[180px]">
+        {activeStep === 1 && (
+          <DistributionStep
+            positions={positions}
+            shareClasses={shareClasses}
+            lastNavEnd={lastNavEnd}
+            currencyCode={currencyCode}
+            entityUUID={entityUUID}
+            existingDistributions={existingDistributions}
+            defaultDate={defaultMutationDate}
+            onDone={() => { onRefresh(); setStep1Done(true); setActiveStep(2) }}
+            onSkip={() => { setStep1Done(true); setActiveStep(2) }}
+          />
+        )}
+
+        {activeStep === 2 && (
+          <RedemptionStep
+            positions={positions}
+            shareClasses={shareClasses}
+            lastNavEnd={lastNavEnd}
+            currencyCode={currencyCode}
+            entityUUID={entityUUID}
+            existingRedemptions={existingRedemptions}
+            defaultDate={defaultMutationDate}
+            onDone={() => { onRefresh(); setStep2Done(true); setActiveStep(3) }}
+            onSkip={() => { setStep2Done(true); setActiveStep(3) }}
+            onMutated={onRefresh}
+          />
+        )}
+
+        {activeStep === 3 && (
+          <div className="flex flex-col gap-4">
+            {/* Subscriptions content — no Open period button here */}
+            {undeployedCalls.length > 0 && (
+              <>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-semibold">Pending capital</h3>
+                    <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[11px] font-medium">
+                      {undeployedCalls.length}
+                    </span>
+                  </div>
+                  <Button size="sm" variant="outline" onClick={() => setSubscribeAllOpen(true)}>
+                    Subscribe all
+                  </Button>
+                </div>
+                <div className="rounded-xl border bg-card overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/30 border-b">
+                      <tr>
+                        <th className="text-left py-2 px-4 text-xs font-medium text-muted-foreground">Investor</th>
+                        <th className="text-left py-2 px-3 text-xs font-medium text-muted-foreground">Share class</th>
+                        <th className="text-left py-2 px-3 text-xs font-medium text-muted-foreground">Paid</th>
+                        <th className="text-right py-2 px-3 text-xs font-medium text-muted-foreground">Amount</th>
+                        <th className="py-2 px-4" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {undeployedCalls.map(({ call, entry }) => (
+                        <tr key={call.id} className="border-b last:border-0">
+                          <td className="py-2.5 px-4">
+                            <div className="font-medium">{entry._shareholder?.name ?? "—"}</div>
+                            {entry._shareholder?.email && <div className="text-xs text-muted-foreground">{entry._shareholder.email}</div>}
+                          </td>
+                          <td className="py-2.5 px-3 text-muted-foreground">{call._share_class?.name ?? "—"}</td>
+                          <td className="py-2.5 px-3 text-muted-foreground">{fmtDate(call.received_at)}</td>
+                          <td className="py-2.5 px-3 text-right tabular-nums font-medium">{fmtCcy(call.amount, currencyCode)}</td>
+                          <td className="py-2.5 px-4 text-right">
+                            <Button size="sm" variant="outline" onClick={() => setDeployCall({ call, entry })}>
+                              Subscribe
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+
+            {pendingSubs.length > 0 && (
+              <div className="rounded-xl border bg-card overflow-hidden">
+                <div className="flex items-center gap-2 px-4 py-2.5 bg-muted/30 border-b">
+                  <span className="text-sm font-semibold">Pending subscriptions</span>
+                  <span className="inline-flex items-center rounded-full bg-blue-100 text-blue-700 px-2 py-0.5 text-[11px] font-medium">
+                    {pendingSubs.length}
+                  </span>
+                </div>
+                {(() => {
+                  const totalIn = pendingSubs.reduce((s, m) => s + (m.amount_for_shares ?? 0), 0)
+                  const totalShares = pendingSubs.reduce((s, m) => s + (m.shares_issued ?? 0), 0)
+                  return (
+                    <MutationRows
+                      mutations={pendingSubs}
+                      currencyCode={currencyCode}
+                      footer={
+                        <tfoot className="border-t bg-muted/20">
+                          <tr>
+                            <td className="py-2 px-4 text-xs font-semibold">Total</td>
+                            <td /><td /><td />
+                            <td className="py-2 px-3 text-right tabular-nums text-xs font-semibold">{fmtCcy(totalIn, currencyCode)}</td>
+                            <td className="py-2 px-4 text-right tabular-nums text-xs font-semibold">{fmt(totalShares, 4)}</td>
+                          </tr>
+                        </tfoot>
+                      }
+                    />
+                  )
+                })()}
+              </div>
+            )}
+
+            {undeployedCalls.length === 0 && pendingSubs.length === 0 && (
+              <div className="flex flex-col items-center gap-2 py-8 text-center">
+                <p className="text-sm text-muted-foreground">No pending subscriptions.</p>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between">
+              <Button variant="ghost" onClick={() => { setStep3Done(true); setActiveStep(4) }}>Skip subscriptions →</Button>
+              <Button onClick={() => { setStep3Done(true); setActiveStep(4) }}>
+                {pendingSubs.length > 0 ? "Review & open period →" : "Next →"}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {activeStep === 4 && (
+          <OpenPeriodStep
+            lastClosedPeriod={lastClosedPeriod}
+            pendingMutations={pendingMutations}
+            existingDistributions={existingDistributions}
+            existingRedemptions={existingRedemptions}
+            currencyCode={currencyCode}
+            onOpenPeriod={onOpenPeriod}
+          />
+        )}
+      </div>
+
+      {deployCall && (
+        <DeployCallDialog
+          open
+          onClose={() => setDeployCall(null)}
+          entityUUID={entityUUID}
+          call={deployCall.call}
+          entry={deployCall.entry}
+          openPeriod={null}
+          previousPeriod={lastClosedPeriod}
+          currencyCode={currencyCode}
+          onSuccess={() => { setDeployCall(null); onRefresh() }}
+        />
+      )}
+      <SubscribeAllDialog
+        open={subscribeAllOpen}
+        onClose={() => setSubscribeAllOpen(false)}
+        entityUUID={entityUUID}
+        calls={undeployedCalls}
+        openPeriod={null}
+        previousPeriod={lastClosedPeriod}
+        currencyCode={currencyCode}
+        onSuccess={() => { setSubscribeAllOpen(false); onRefresh() }}
+      />
+    </div>
+  )
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export function FundNavManager({
@@ -1504,11 +2781,9 @@ export function FundNavManager({
   const [loading, setLoading] = React.useState(true)
   const [openPeriodDialogOpen, setOpenPeriodDialogOpen] = React.useState(false)
   const [addMutationOpen, setAddMutationOpen] = React.useState(false)
-  const [deployCall, setDeployCall] = React.useState<{ call: CapitalCall; entry: CapTableEntry } | null>(null)
-  const [subscribeAllOpen, setSubscribeAllOpen] = React.useState(false)
 
-  const load = React.useCallback(async () => {
-    setLoading(true)
+  const load = React.useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
       const [periodsRes, mutationsRes, sc, entries] = await Promise.all([
         fetch(`/api/fund-periods?entity=${entityUUID}`, { cache: "no-store" }).then((r) => r.ok ? r.json() : []),
@@ -1520,10 +2795,13 @@ export function FundNavManager({
       setAllMutations(mutationsRes as FundMutation[])
       setShareClasses(sc)
       setCapTableEntries(entries)
+      window.dispatchEvent(new CustomEvent("ledger:update"))
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [entityUUID])
+
+  const silentLoad = React.useCallback(() => { void load(true) }, [load])
 
   React.useEffect(() => { void load() }, [load])
 
@@ -1541,6 +2819,15 @@ export function FundNavManager({
     }
     return result
   }, [capTableEntries])
+
+  // Capital received into the fund bank account but not yet processed as a subscription mutation.
+  // This cash appears in entity stats but should not count toward the current period's NAV.
+  const receivedUndeployedTotal = React.useMemo(
+    () => undeployedCalls
+      .filter(({ call }) => call.received_at != null)
+      .reduce((s, { call }) => s + (call.amount ?? 0), 0),
+    [undeployedCalls]
+  )
 
   // Mutations not yet assigned to any period
   const pendingMutations = React.useMemo(
@@ -1576,124 +2863,52 @@ export function FundNavManager({
           entityUUID={entityUUID}
           shareClasses={shareClasses}
           previousPeriod={lastClosedPeriod}
+          priorPeriods={closedPeriods}
           periodFrequency={periodFrequency}
+          receivedUndeployedTotal={receivedUndeployedTotal}
           onRefresh={load}
-          onAddMutation={() => setAddMutationOpen(true)}
         />
       )}
 
-      {/* ── Pending capital calls (undeployed) ───────────────────────────── */}
-      {undeployedCalls.length > 0 && (
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold">Pending capital</h2>
-              <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[11px] font-medium">
-                {undeployedCalls.length}
-              </span>
-            </div>
-            <Button size="sm" variant="outline" onClick={() => setSubscribeAllOpen(true)}>
-              Subscribe all
-            </Button>
-          </div>
-          <div className="rounded-xl border bg-card overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-muted/30 border-b">
-                <tr>
-                  <th className="text-left py-2 px-4 text-xs font-medium text-muted-foreground">Investor</th>
-                  <th className="text-left py-2 px-3 text-xs font-medium text-muted-foreground">Share class</th>
-                  <th className="text-left py-2 px-3 text-xs font-medium text-muted-foreground">Paid</th>
-                  <th className="text-right py-2 px-3 text-xs font-medium text-muted-foreground">Amount</th>
-                  <th className="py-2 px-4" />
-                </tr>
-              </thead>
-              <tbody>
-                {undeployedCalls.map(({ call, entry }) => (
-                  <tr key={call.id} className="border-b last:border-0">
-                    <td className="py-2.5 px-4">
-                      <div className="font-medium">{entry._shareholder?.name ?? "—"}</div>
-                      {entry._shareholder?.email && (
-                        <div className="text-xs text-muted-foreground">{entry._shareholder.email}</div>
-                      )}
-                    </td>
-                    <td className="py-2.5 px-3 text-muted-foreground">{call._share_class?.name ?? "—"}</td>
-                    <td className="py-2.5 px-3 text-muted-foreground">{fmtDate(call.received_at)}</td>
-                    <td className="py-2.5 px-3 text-right tabular-nums font-medium">{fmtCcy(call.amount, currencyCode)}</td>
-                    <td className="py-2.5 px-4 text-right">
-                      <Button size="sm" variant="outline" onClick={() => setDeployCall({ call, entry })}>
-                        Subscribe
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* ── Pending mutations (subscribed, not yet in a period) ───────────── */}
-      {!openPeriod && pendingMutations.length > 0 && (
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold">Pending mutations</h2>
-              <span className="inline-flex items-center rounded-full bg-blue-100 text-blue-700 px-2 py-0.5 text-[11px] font-medium">
-                {pendingMutations.length}
-              </span>
-            </div>
-            <Button size="sm" onClick={() => setOpenPeriodDialogOpen(true)}>
-              <Plus className="size-3.5 mr-1.5" />
-              Open period
-            </Button>
-          </div>
-          <div className="rounded-xl border bg-card overflow-hidden">
-            <MutationRows mutations={pendingMutations} currencyCode={currencyCode} />
-            <div className="flex items-center gap-6 px-4 py-2.5 bg-muted/20 border-t text-xs text-muted-foreground">
-              {(() => {
-                const subs = pendingMutations.filter((m) => m.type === "subscription")
-                const totalIn = subs.reduce((s, m) => s + (m.amount_for_shares ?? 0), 0)
-                const totalShares = subs.reduce((s, m) => s + (m.shares_issued ?? 0), 0)
-                return (
-                  <>
-                    {totalIn > 0 && <span>Total in: <span className="font-medium text-foreground">{fmtCcy(totalIn, currencyCode)}</span></span>}
-                    {totalShares > 0 && <span>Shares: <span className="font-medium text-foreground">{fmt(totalShares, 4)}</span></span>}
-                  </>
-                )
-              })()}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── No open period, no pending mutations ─────────────────────────── */}
-      {!openPeriod && pendingMutations.length === 0 && undeployedCalls.length === 0 && (
-        <div className="rounded-xl border p-6 flex flex-col items-center gap-3 text-center">
-          <p className="text-sm text-muted-foreground">
-            No open period. Open a new period to start tracking NAV and mutations.
-          </p>
-          <Button size="sm" variant="outline" onClick={() => setOpenPeriodDialogOpen(true)}>
-            <Plus className="size-3.5 mr-1.5" />
-            Open period
-          </Button>
-        </div>
+      {/* ── Mutation workflow (no open period) ───────────────────────────── */}
+      {!openPeriod && (
+        <MutationWorkflow
+          entityUUID={entityUUID}
+          currencyCode={currencyCode}
+          lastClosedPeriod={lastClosedPeriod}
+          allMutations={allMutations}
+          pendingMutations={pendingMutations}
+          shareClasses={shareClasses}
+          capTableEntries={capTableEntries}
+          undeployedCalls={undeployedCalls}
+          onRefresh={silentLoad}
+          onOpenPeriod={() => setOpenPeriodDialogOpen(true)}
+        />
       )}
 
       {/* ── Closed periods ────────────────────────────────────────────────── */}
       {closedPeriods.length > 0 && (
         <div className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold">Closed periods</h2>
-          {closedPeriods.map((p) => (
-            <PeriodCard
-              key={p.id}
-              period={p}
-              mutations={mutsByPeriod.get(p.id) ?? []}
-              shareClasses={shareClasses}
-              entityUUID={entityUUID}
-              currencyCode={currencyCode}
-              onRefresh={load}
-            />
-          ))}
+          {closedPeriods.map((p, idx) => {
+            // Cumulative = this period + all older closed periods (array is newest-first)
+            const cumulativePeriodIds = new Set(closedPeriods.slice(idx).map((cp) => cp.id))
+            const cumulativeMutations = allMutations.filter(
+              (m) => m.period && cumulativePeriodIds.has(m.period)
+            )
+            return (
+              <PeriodCard
+                key={p.id}
+                period={p}
+                mutations={mutsByPeriod.get(p.id) ?? []}
+                cumulativeMutations={cumulativeMutations}
+                shareClasses={shareClasses}
+                entityUUID={entityUUID}
+                currencyCode={currencyCode}
+                onRefresh={load}
+              />
+            )
+          })}
         </div>
       )}
 
@@ -1705,6 +2920,7 @@ export function FundNavManager({
         previousPeriod={lastClosedPeriod}
         pendingMutations={pendingMutations}
         currencyCode={currencyCode}
+        periodFrequency={periodFrequency}
         onSuccess={() => { setOpenPeriodDialogOpen(false); void load() }}
       />
 
@@ -1718,30 +2934,6 @@ export function FundNavManager({
         />
       )}
 
-      {deployCall && (
-        <DeployCallDialog
-          open
-          onClose={() => setDeployCall(null)}
-          entityUUID={entityUUID}
-          call={deployCall.call}
-          entry={deployCall.entry}
-          openPeriod={openPeriod}
-          previousPeriod={lastClosedPeriod}
-          currencyCode={currencyCode}
-          onSuccess={() => { setDeployCall(null); void load() }}
-        />
-      )}
-
-      <SubscribeAllDialog
-        open={subscribeAllOpen}
-        onClose={() => setSubscribeAllOpen(false)}
-        entityUUID={entityUUID}
-        calls={undeployedCalls}
-        openPeriod={openPeriod}
-        previousPeriod={lastClosedPeriod}
-        currencyCode={currencyCode}
-        onSuccess={() => { setSubscribeAllOpen(false); void load() }}
-      />
     </div>
   )
 }

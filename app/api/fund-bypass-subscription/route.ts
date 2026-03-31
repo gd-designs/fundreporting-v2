@@ -465,24 +465,14 @@ export async function POST(req: NextRequest) {
   }
 
   // ── STEP 10: Investor buy transaction (3 entries) ─────────────────────────
+  // NOTE: We deliberately do NOT calculate or record units (shares) here.
+  // Shares are only created when a subscription mutation is processed at period open,
+  // using the actual NAV at that time.
   if (
     investorPortfolioEntityUUID &&
     investorCashAssetId &&
     fundInvestmentAssetId
   ) {
-    // Fetch share class NAV for units calculation
-    let nav: number | null = null;
-    if (shareClassId) {
-      const scRes = await fetch(`${base}/share_class/${shareClassId}`, {
-        headers: h,
-        cache: "no-store",
-      });
-      if (scRes.ok) {
-        const scData: { current_nav?: number | null } = await scRes.json();
-        nav = scData.current_nav ?? null;
-      }
-    }
-    const units = nav && nav > 0 ? netForShares / nav : null;
 
     const invTxRes = await fetch(`${base}/transaction`, {
       method: "POST",
@@ -549,7 +539,6 @@ export async function POST(req: NextRequest) {
           direction: "in",
           currency: currencyId,
           amount: netForShares,
-          ...(units != null ? { units, price_per_unit: nav } : {}),
           source: "cash",
           source_id: investorCashAssetId,
         }),

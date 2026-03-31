@@ -27,6 +27,7 @@ type FundPeriod = {
   label?: string | null
   status?: "open" | "closed" | null
   opened_at?: number | null
+  closed_at?: number | null
   nav_start?: number | null
   nav_end?: number | null
   nav_gross_end?: number | null
@@ -102,10 +103,10 @@ type CellValue = React.ReactNode
 type MetricRow = {
   kind: "metric"
   label: string
-  /** value shown in the MUTATION sub-column */
-  getMutation?: (p: PeriodWithMutations, code: string) => CellValue
-  /** value shown in the PERIOD sub-column */
-  getPeriod?: (p: PeriodWithMutations, code: string) => CellValue
+  /** value shown in the MUTATION sub-column; prevP = period before this one (null for first) */
+  getMutation?: (p: PeriodWithMutations, prevP: PeriodWithMutations | null, code: string, idx: number, allPeriods: PeriodWithMutations[]) => CellValue
+  /** value shown in the PERIOD sub-column; prevP = period before this one (null for first) */
+  getPeriod?: (p: PeriodWithMutations, prevP: PeriodWithMutations | null, code: string, idx: number, allPeriods: PeriodWithMutations[]) => CellValue
 }
 
 type SectionRow = { kind: "section"; label: string; color: string; mutActive?: boolean }
@@ -117,15 +118,24 @@ function buildRows(): RowDef[] {
     { kind: "section", label: "STEP A: DATA FROM END LAST PERIOD", color: "bg-slate-700 text-white", mutActive: false },
     {
       kind: "metric", label: "Start NAV this period",
-      getPeriod: (p, code) => fmtCcy(p.nav_start, code),
+      getPeriod: (p, _prevP, code) => fmtCcy(p.nav_start, code),
     },
     {
       kind: "metric", label: "Total amount of shares outstanding beginning of the period",
-      getPeriod: (p) => fmt(p.total_shares_start, 2),
+      getPeriod: (p, _prevP, _code) => fmt(p.total_shares_start, 2),
     },
     {
       kind: "metric", label: "Total Assets Under Management beginning of the period",
-      getPeriod: (p, code) => fmtCcy(p.total_aum_start, code),
+      getPeriod: (p, prevP, code) => {
+        // Compute from previous period's end AUM + net mutations (handles stale stored value)
+        if (prevP != null) {
+          const subsAum = p.mutations.filter(m => m.type === "subscription").reduce((s, m) => s + (m.amount_for_shares ?? 0), 0)
+          const redsAum = p.mutations.filter(m => m.type === "redemption").reduce((s, m) => s + (m.amount_returned ?? 0), 0)
+          const distsAum = p.mutations.filter(m => m.type === "distribution").reduce((s, m) => s + (m.amount_distributed ?? 0), 0)
+          return fmtCcy((prevP.total_aum_end ?? 0) + subsAum - redsAum - distsAum, code)
+        }
+        return fmtCcy(p.total_aum_start, code)
+      },
     },
 
     // ── Step B (period col only) ──────────────────────────────────────────────
@@ -137,15 +147,15 @@ function buildRows(): RowDef[] {
     },
     {
       kind: "metric", label: "BALANCE: Total Invested Assets end of period (cash + trades)",
-      getPeriod: (p, code) => fmtCcy(p.total_invested_assets, code),
+      getPeriod: (p, _prevP, code) => fmtCcy(p.total_invested_assets, code),
     },
     {
       kind: "metric", label: "BALANCE: Total Debt end of period",
-      getPeriod: (p, code) => fmtCcy(p.total_debt, code),
+      getPeriod: (p, _prevP, code) => fmtCcy(p.total_debt, code),
     },
     {
       kind: "metric", label: "BALANCE:  Asset minus Liabilities end of period",
-      getPeriod: (p, code) => {
+      getPeriod: (p, _prevP, code) => {
         if (p.total_invested_assets != null && p.total_debt != null) {
           return fmtCcy(p.total_invested_assets - p.total_debt, code)
         }
@@ -154,13 +164,20 @@ function buildRows(): RowDef[] {
     },
     {
       kind: "metric", label: "P&L: Cost associated with the fund in period",
-      getPeriod: (p, code) => (p.pnl_costs != null ? fmtCcy(p.pnl_costs, code) : "—"),
+      getPeriod: (_p, _prevP, code, idx, allPeriods) => {
+        if (idx === 0) return "—"
+        const cumulative = allPeriods.slice(0, idx).reduce((s, prev) => s + (prev.management_fee_total ?? 0), 0)
+        return cumulative > 0 ? fmtCcy(cumulative, code) : "—"
+      },
     },
     {
       kind: "metric", label: "BALANCE:  Total Assets Under Management end of period",
-      getPeriod: (p, code) => {
+      getPeriod: (p, _prevP, code, idx, allPeriods) => {
+        const cumulativeFees = idx > 0
+          ? allPeriods.slice(0, idx).reduce((s, prev) => s + (prev.management_fee_total ?? 0), 0)
+          : 0
         if (p.total_invested_assets != null && p.total_debt != null) {
-          return fmtCcy(p.total_invested_assets - p.total_debt - (p.pnl_costs ?? 0), code)
+          return fmtCcy(p.total_invested_assets - p.total_debt - cumulativeFees, code)
         }
         return fmtCcy(p.total_aum_end, code)
       },
@@ -171,38 +188,38 @@ function buildRows(): RowDef[] {
     { kind: "section", label: "STEP C: NET NAV CALCULATION", color: "bg-slate-700 text-white", mutActive: false },
     {
       kind: "metric", label: "Gross end NAV for the period",
-      getPeriod: (p, code) => fmtCcy(p.nav_gross_end, code),
+      getPeriod: (p, _prevP, code) => fmtCcy(p.nav_gross_end, code),
     },
     {
       kind: "metric", label: "Gross end yield for the period",
-      getPeriod: (p) => fmtPct(p.yield_gross),
+      getPeriod: (p, _prevP, _code) => fmtPct(p.yield_gross),
     },
     {
       kind: "metric", label: "Managementfee per share over the period",
-      getPeriod: (p, code) =>
+      getPeriod: (p, _prevP, code) =>
         p.management_fee_per_share != null ? fmtCcy(p.management_fee_per_share, code) : "—",
     },
     {
       kind: "metric", label: "Managementfee total the period",
-      getPeriod: (p, code) =>
+      getPeriod: (p, _prevP, code) =>
         p.management_fee_total != null ? fmtCcy(p.management_fee_total, code) : "—",
     },
     {
       kind: "metric", label: "Net NAV end of the period",
-      getPeriod: (p, code) =>
+      getPeriod: (p, _prevP, code) =>
         p.nav_end != null ? fmtCcy(p.nav_end, code) : p.status === "open" ? OPEN_CELL : "—",
     },
     {
       kind: "metric", label: "Net yield for the period",
-      getPeriod: (p) => fmtPct(p.yield_net),
+      getPeriod: (p, _prevP, _code) => fmtPct(p.yield_net),
     },
     {
       kind: "metric", label: "Total amount of shares outstanding  end of period",
-      getPeriod: (p) => (p.status === "open" ? OPEN_CELL : fmt(p.total_shares_end, 2)),
+      getPeriod: (p, _prevP, _code) => (p.status === "open" ? OPEN_CELL : fmt(p.total_shares_end, 2)),
     },
     {
       kind: "metric", label: "Total Assets Under Management end of period",
-      getPeriod: (p, code) =>
+      getPeriod: (p, _prevP, code) =>
         p.status === "open" ? OPEN_CELL : fmtCcy(p.total_aum_end, code),
     },
 
@@ -211,11 +228,11 @@ function buildRows(): RowDef[] {
     { kind: "section", label: "STEP 1: DISTRIBUTION", color: "bg-blue-700 text-white", mutActive: true },
     {
       kind: "metric", label: "The investor(s)",
-      getMutation: (p) => investorNames(p.mutations, "distribution"),
+      getMutation: (p, _prevP, _code) => investorNames(p.mutations, "distribution"),
     },
     {
       kind: "metric", label: "Cash distribution (amount)",
-      getMutation: (p, code) => {
+      getMutation: (p, _prevP, code) => {
         const total = p.mutations
           .filter((m) => m.type === "distribution")
           .reduce((s, m) => s + (m.amount_distributed ?? 0), 0)
@@ -225,18 +242,20 @@ function buildRows(): RowDef[] {
     {
       kind: "metric",
       label: "Total Assets Under Management end of period after distribution",
-      getMutation: (p, code) => {
+      getMutation: (p, prevP, code) => {
         const distTotal = p.mutations
           .filter((m) => m.type === "distribution")
           .reduce((s, m) => s + (m.amount_distributed ?? 0), 0)
-        if (p.total_aum_end == null && distTotal === 0) return "—"
-        const base = p.total_aum_end ?? 0
-        return fmtCcy(base - distTotal, code)
+        // Base AUM = previous period's closing AUM (Step B total)
+        const base = prevP?.total_aum_end ?? null
+        if (base == null && distTotal === 0) return "—"
+        return fmtCcy((base ?? 0) - distTotal, code)
       },
     },
     {
       kind: "metric", label: "Total amount of shares outstanding  end of period",
-      getMutation: (p) => (p.status === "open" ? OPEN_CELL : fmt(p.total_shares_end, 2)),
+      // Distributions do not affect share count — use previous period's ending shares
+      getMutation: (_p, prevP, _code) => fmt(prevP?.total_shares_end, 2),
     },
 
     // ── Step 2: Redemption (mutation col only) ────────────────────────────────
@@ -244,11 +263,11 @@ function buildRows(): RowDef[] {
     { kind: "section", label: "STEP 2: REDEMPTION", color: "bg-red-700 text-white", mutActive: true },
     {
       kind: "metric", label: "The investor(s)",
-      getMutation: (p) => investorNames(p.mutations, "redemption"),
+      getMutation: (p, _prevP, _code) => investorNames(p.mutations, "redemption"),
     },
     {
       kind: "metric", label: "Amount asked to return by the investor (amount)",
-      getMutation: (p, code) => {
+      getMutation: (p, _prevP, code) => {
         const total = p.mutations
           .filter((m) => m.type === "redemption")
           .reduce((s, m) => s + (m.amount_returned ?? 0), 0)
@@ -257,7 +276,7 @@ function buildRows(): RowDef[] {
     },
     {
       kind: "metric", label: "Net NAV end of period",
-      getMutation: (p, code) => {
+      getMutation: (p, _prevP, code) => {
         const reds = p.mutations.filter((m) => m.type === "redemption")
         if (reds.length === 0) return "—"
         return fmtCcy(reds[0].nav_per_share, code)
@@ -265,7 +284,7 @@ function buildRows(): RowDef[] {
     },
     {
       kind: "metric", label: "Amount of shares returned",
-      getMutation: (p) => {
+      getMutation: (p, _prevP, _code) => {
         const total = p.mutations
           .filter((m) => m.type === "redemption")
           .reduce((s, m) => s + (m.shares_redeemed ?? 0), 0)
@@ -274,7 +293,14 @@ function buildRows(): RowDef[] {
     },
     {
       kind: "metric", label: "Total amount of shares outstanding after redemption",
-      getMutation: (p) => (p.status === "open" ? OPEN_CELL : fmt(p.total_shares_end, 2)),
+      getMutation: (p, prevP, _code) => {
+        const redeemed = p.mutations
+          .filter((m) => m.type === "redemption")
+          .reduce((s, m) => s + (m.shares_redeemed ?? 0), 0)
+        const startShares = prevP?.total_shares_end ?? null
+        if (startShares == null) return "—"
+        return fmt(startShares - redeemed, 2)
+      },
     },
 
     // ── Step 3: Subscription (mutation col only) ──────────────────────────────
@@ -282,11 +308,11 @@ function buildRows(): RowDef[] {
     { kind: "section", label: "STEP 3: SUBSCRIPTION", color: "bg-emerald-700 text-white", mutActive: true },
     {
       kind: "metric", label: "The investor(s)",
-      getMutation: (p) => investorNames(p.mutations, "subscription"),
+      getMutation: (p, _prevP, _code) => investorNames(p.mutations, "subscription"),
     },
     {
       kind: "metric", label: "Amount send to the fund by investors",
-      getMutation: (p, code) => {
+      getMutation: (p, _prevP, code) => {
         const total = p.mutations
           .filter((m) => m.type === "subscription")
           .reduce((s, m) => s + (m.amount_for_shares ?? 0), 0)
@@ -295,7 +321,7 @@ function buildRows(): RowDef[] {
     },
     {
       kind: "metric", label: "Subscription fee (can be stable fee or %)",
-      getMutation: (p, code) => {
+      getMutation: (p, _prevP, code) => {
         const total = p.mutations
           .filter((m) => m.type === "subscription")
           .reduce((s, m) => s + (m.fee_amount ?? 0), 0)
@@ -304,7 +330,7 @@ function buildRows(): RowDef[] {
     },
     {
       kind: "metric", label: "Amount available for buying shares",
-      getMutation: (p, code) => {
+      getMutation: (p, _prevP, code) => {
         const total = p.mutations
           .filter((m) => m.type === "subscription")
           .reduce((s, m) => s + (m.amount_for_shares ?? 0), 0)
@@ -313,7 +339,7 @@ function buildRows(): RowDef[] {
     },
     {
       kind: "metric", label: "Net NAV end of period",
-      getMutation: (p, code) => {
+      getMutation: (p, _prevP, code) => {
         const subs = p.mutations.filter((m) => m.type === "subscription")
         if (subs.length === 0) return "—"
         return fmtCcy(subs[0].nav_per_share, code)
@@ -322,7 +348,7 @@ function buildRows(): RowDef[] {
     {
       kind: "metric",
       label: "Amount of shares issued (option to round up or down ,00 or ,0 or 0.)",
-      getMutation: (p) => {
+      getMutation: (p, _prevP, _code) => {
         const total = p.mutations
           .filter((m) => m.type === "subscription")
           .reduce((s, m) => s + (m.shares_issued ?? 0), 0)
@@ -335,16 +361,18 @@ function buildRows(): RowDef[] {
     { kind: "section", label: "STEP 4: DATA AFTER MUTATIONS", color: "bg-slate-700 text-white", mutActive: true },
     {
       kind: "metric", label: "Net NAV before mutation",
-      getMutation: (p, code) => fmtCcy(p.nav_start, code),
+      // NAV before this mutation = previous period's closing NAV
+      getMutation: (p, prevP, code) => fmtCcy(prevP?.nav_end ?? p.nav_start, code),
     },
     {
       kind: "metric", label: "Net NAV after mutation",
-      getMutation: (p, code) =>
-        p.nav_end != null ? fmtCcy(p.nav_end, code) : p.status === "open" ? OPEN_CELL : "—",
+      // NAV after opening subscriptions = this period's starting NAV
+      getMutation: (p, _prevP, code) => fmtCcy(p.nav_start, code),
     },
     {
       kind: "metric", label: "Total amount of shares outstanding after mutation",
-      getMutation: (p) => (p.status === "open" ? OPEN_CELL : fmt(p.total_shares_end, 2)),
+      // Shares at start of this period = after all opening mutations have been applied
+      getMutation: (p, _prevP, _code) => (p.status === "open" ? OPEN_CELL : fmt(p.total_shares_start, 2)),
     },
   ]
 }
@@ -385,9 +413,9 @@ function computeCapTable(periods: PeriodWithMutations[]) {
 
 // ─── Table cell helpers ───────────────────────────────────────────────────────
 
-const tdMut = "px-3 py-1.5 text-right tabular-nums text-[11px] border-l min-w-28"
-const tdPer = "px-3 py-1.5 text-right tabular-nums text-[11px] border-l min-w-32"
-const tdLabel = "sticky left-0 z-10 bg-background border-r px-3 py-1.5 text-[11px] text-muted-foreground font-medium whitespace-nowrap max-w-[18rem] pr-4"
+const tdMut = "px-3 py-1.5 text-right tabular-nums text-[11px] border-l min-w-36"
+const tdPer = "px-3 py-1.5 text-right tabular-nums text-[11px] border-l min-w-44"
+const tdLabel = "sticky left-0 z-10 bg-background border-r px-3 py-1.5 text-[11px] text-muted-foreground font-medium whitespace-nowrap min-w-72 pr-4"
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -462,26 +490,32 @@ export function FundNavSheet({
   const totalCols = 1 + periods.length * 2
 
   return (
-    <div className="overflow-x-auto rounded-xl border">
-      <table className="min-w-max w-full text-[11px] border-collapse">
+    <div className="overflow-x-auto rounded-xl border w-full">
+      <table className="w-full min-w-max text-[11px] border-collapse">
 
         {/* ── Header ─────────────────────────────────────────────────────────── */}
         <thead>
           <tr className="border-b bg-muted/60">
-            <th className="sticky left-0 z-10 bg-muted/60 text-left px-3 py-2 text-xs font-bold border-r min-w-[18rem]">
+            <th className="sticky left-0 z-10 bg-muted/60 text-left px-3 py-2 text-xs font-bold border-r min-w-72">
               NAV CALCULATION
             </th>
             {periods.map((p) => (
               <React.Fragment key={p.id}>
-                <th className="px-3 py-2 text-center text-[10px] font-semibold text-muted-foreground bg-slate-200 border-l min-w-28">
+                <th className="px-3 py-2 text-center text-[10px] font-semibold text-muted-foreground bg-slate-200 border-l min-w-36">
                   MUTATION
                 </th>
-                <th className="px-3 py-2 text-center text-xs font-bold border-l min-w-32">
+                <th className="px-3 py-2 text-center text-xs font-bold border-l min-w-44">
                   <div>{colLabel(p)}</div>
-                  {p.status === "open" && (
+                  {p.status === "open" ? (
                     <span className="mt-0.5 inline-flex items-center rounded-full bg-emerald-100 text-emerald-700 px-1.5 py-0.5 text-[9px] font-medium">
                       Open
                     </span>
+                  ) : (p.opened_at || p.closed_at) && (
+                    <div className="mt-0.5 text-[9px] font-normal text-muted-foreground">
+                      {p.opened_at ? new Date(p.opened_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}
+                      {" → "}
+                      {p.closed_at ? new Date(p.closed_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }) : "—"}
+                    </div>
                   )}
                 </th>
               </React.Fragment>
@@ -497,7 +531,7 @@ export function FundNavSheet({
               const perCls = row.mutActive ? "bg-slate-200 border-l" : `${row.color} border-l`
               return (
                 <tr key={i} className="border-b">
-                  <td className={`sticky left-0 px-3 py-1.5 text-[10px] font-bold tracking-wide ${row.color}`}>
+                  <td className={`sticky left-0 z-10 min-w-72 px-3 py-1.5 text-[10px] font-bold tracking-wide ${row.color}`}>
                     {row.label}
                   </td>
                   {periods.map((p) => (
@@ -517,16 +551,19 @@ export function FundNavSheet({
             return (
               <tr key={i} className="border-b hover:bg-muted/20 transition-colors">
                 <td className={tdLabel}>{row.label}</td>
-                {periods.map((p) => (
+                {periods.map((p, idx) => {
+                  const prevP = idx > 0 ? periods[idx - 1] : null
+                  return (
                   <React.Fragment key={p.id}>
                     <td className={mutInactive ? `${tdMut} bg-slate-200!` : tdMut}>
-                      {row.getMutation ? row.getMutation(p, currencyCode) : ""}
+                      {row.getMutation ? row.getMutation(p, prevP, currencyCode, idx, periods) : ""}
                     </td>
                     <td className={periodInactive ? `${tdPer} bg-slate-200!` : tdPer}>
-                      {row.getPeriod ? row.getPeriod(p, currencyCode) : ""}
+                      {row.getPeriod ? row.getPeriod(p, prevP, currencyCode, idx, periods) : ""}
                     </td>
                   </React.Fragment>
-                ))}
+                  )
+                })}
               </tr>
             )
           })}
@@ -538,7 +575,7 @@ export function FundNavSheet({
 
           {/* ── Cap table section header ─────────────────────────────────────── */}
           <tr className="border-b">
-            <td className="sticky left-0 px-3 py-1.5 text-[10px] font-bold tracking-wide bg-slate-700 text-white">
+            <td className="sticky left-0 z-10 min-w-72 px-3 py-1.5 text-[10px] font-bold tracking-wide bg-slate-700 text-white">
               CAP TABLE
             </td>
             {periods.map((p) => (
