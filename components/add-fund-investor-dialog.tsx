@@ -216,6 +216,7 @@ export function AddFundInvestorDialog({
       }
 
       // Cap-table-only or standard pending call flow ─────────────────────────
+      // Note: /api/cap-table-shareholders proxy auto-resolves (find or create) user by email
 
       // 1. Get or create AM-level shareholder
       let amShareholderId: string | null = null

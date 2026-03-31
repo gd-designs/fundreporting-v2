@@ -10,6 +10,8 @@ export type EntityAsset = {
   order: number | null
   investable: "investable_cash" | "investable_convert" | "non_investable" | "equity_stake" | null
   capTableShareholder: string | null
+  capTableEntry: string | null
+  fundId: string | null               // direct link to fund source (for equity_stake assets)
   shareholderEntityId: string | null  // company/fund entity UUID this shareholder belongs to
   stakeValue: number | null        // myShares × current_nav (book value only; use ownershipPct × liveNAV for live value)
   ownershipPct: number | null      // my_shares / total_shares across all shareholders
@@ -96,6 +98,8 @@ export function mapXanoAsset(raw: unknown): EntityAsset | null {
         ? item.investable
         : null,
     capTableShareholder: typeof item.cap_table_shareholder === "string" && item.cap_table_shareholder ? item.cap_table_shareholder : null,
+    capTableEntry: typeof item.cap_table_entry === "string" && item.cap_table_entry ? item.cap_table_entry : null,
+    fundId: typeof item.fund === "string" && item.fund ? item.fund : null,
     ...(() => {
       const sh = item._cap_table_shareholder as Record<string, unknown> | undefined
       if (!sh || typeof sh.id !== "string") return { shareholderEntityId: null, stakeValue: null, ownershipPct: null, totalShares: null, myShares: null }

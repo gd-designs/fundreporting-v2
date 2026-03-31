@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { ChevronDown, ChevronRight, MoreHorizontal, Lock, Pencil, Plus, Trash2, UserPlus } from "lucide-react"
+import { ChevronDown, ChevronRight, MoreHorizontal, Lock, Pencil, Plus, Trash2, UserPlus, RefreshCw } from "lucide-react"
 import {
   fetchCapitalCalls,
   fetchCapTableEntries,
@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Spinner } from "@/components/ui/spinner"
 import { CapitalCallReceive } from "@/components/capital-call-receive"
 import { AddFundInvestorDialog } from "@/components/add-fund-investor-dialog"
+import { ReinvestDialog } from "@/components/reinvest-dialog"
 import { AddShareClassDialog } from "@/components/add-share-class-dialog"
 import { EditShareClassDialog } from "@/components/edit-share-class-dialog"
 import {
@@ -245,11 +246,13 @@ function buildShareholderGroups(
       }))
 
       const allCalls = entryGroups.flatMap((eg) => eg.calls)
+      const totalCalled = allCalls.reduce((s, c) => s + (c.amount ?? 0), 0)
+      const rawCommitted = entryGroups.reduce((s, eg) => s + (eg.entry.committed_amount ?? 0), 0)
       return {
         shareholder: sh,
         entries: entryGroups,
-        totalCommitted: entryGroups.reduce((s, eg) => s + (eg.entry.committed_amount ?? 0), 0),
-        totalCalled: allCalls.reduce((s, c) => s + (c.amount ?? 0), 0),
+        totalCommitted: Math.max(rawCommitted, totalCalled),
+        totalCalled,
         totalDeployed: allCalls.filter((c) => c.deployed_at != null).reduce((s, c) => s + (c.amount ?? 0), 0),
         totalPending: allCalls.filter((c) => c.status === "pending" || c.status === "partial").reduce((s, c) => s + (c.amount ?? 0), 0),
       }
@@ -282,6 +285,7 @@ export function FundCapTableView({
   // Keys: "sh:{id}" for shareholder rows, "entry:{id}" for entry rows
   const [expandedRows, setExpandedRows] = React.useState<Set<string>>(new Set())
   const [editDialog, setEditDialog] = React.useState<{ open: boolean; call: CapitalCall | null; entryShareClass: string | null }>({ open: false, call: null, entryShareClass: null })
+  const [reinvestDialog, setReinvestDialog] = React.useState<{ open: boolean; shareholder: CapTableShareholder | null; entry: CapTableEntry | null }>({ open: false, shareholder: null, entry: null })
   const [addInvestorOpen, setAddInvestorOpen] = React.useState(false)
   const [addShareClassOpen, setAddShareClassOpen] = React.useState(false)
   const [editShareClass, setEditShareClass] = React.useState<ShareClass | null>(null)
@@ -483,7 +487,7 @@ export function FundCapTableView({
                           </td>
                           <td className="py-2.5 px-3 text-right tabular-nums">{fmtCurrency(group.totalCommitted, currencyCode)}</td>
                           <td className="py-2.5 px-3 text-right tabular-nums">{group.totalCalled > 0 ? fmtCurrency(group.totalCalled, currencyCode) : "—"}</td>
-                          <td className="py-2.5 px-3 text-right tabular-nums">{fmtCurrency(uncalled, currencyCode)}</td>
+                          <td className="py-2.5 px-3 text-right tabular-nums">{uncalled > 0 ? fmtCurrency(uncalled, currencyCode) : "—"}</td>
                           <td className="py-2.5 px-3 text-right tabular-nums">{group.totalDeployed > 0 ? fmtCurrency(group.totalDeployed, currencyCode) : "—"}</td>
                           <td className="py-2.5 px-3 text-right tabular-nums">{group.totalPending > 0 ? fmtCurrency(group.totalPending, currencyCode) : "—"}</td>
                           <td className="py-2.5 px-3 text-right">
@@ -501,7 +505,8 @@ export function FundCapTableView({
                           const entryCalled = eg.calls.reduce((s, c) => s + (c.amount ?? 0), 0)
                           const entryDeployed = eg.calls.filter((c) => c.deployed_at != null).reduce((s, c) => s + (c.amount ?? 0), 0)
                           const entryPending = eg.calls.filter((c) => c.status === "pending" || c.status === "partial").reduce((s, c) => s + (c.amount ?? 0), 0)
-                          const entryUncalled = (eg.entry.committed_amount ?? 0) - entryCalled
+                          const entryCommitted = Math.max(eg.entry.committed_amount ?? 0, entryCalled)
+                          const entryUncalled = entryCommitted - entryCalled
 
                           return (
                             <React.Fragment key={eg.entry.id}>
@@ -522,15 +527,29 @@ export function FundCapTableView({
                                     )}
                                   </div>
                                 </td>
-                                <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{fmtCurrency(eg.entry.committed_amount, currencyCode)}</td>
+                                <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{fmtCurrency(entryCommitted, currencyCode)}</td>
                                 <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{entryCalled > 0 ? fmtCurrency(entryCalled, currencyCode) : "—"}</td>
-                                <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{fmtCurrency(entryUncalled, currencyCode)}</td>
+                                <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{entryUncalled > 0 ? fmtCurrency(entryUncalled, currencyCode) : "—"}</td>
                                 <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{entryDeployed > 0 ? fmtCurrency(entryDeployed, currencyCode) : "—"}</td>
                                 <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{entryPending > 0 ? fmtCurrency(entryPending, currencyCode) : "—"}</td>
                                 <td className="py-2 px-3 text-right">
-                                  <span className="text-xs text-muted-foreground">
-                                    {eg.calls.length} call{eg.calls.length !== 1 ? "s" : ""}
-                                  </span>
+                                  <div className="flex items-center justify-end gap-2">
+                                    <span className="text-xs text-muted-foreground">
+                                      {eg.calls.length} call{eg.calls.length !== 1 ? "s" : ""}
+                                    </span>
+                                    <DropdownMenu>
+                                      <DropdownMenuTrigger asChild>
+                                        <Button variant="ghost" size="icon" className="size-6">
+                                          <MoreHorizontal className="size-3.5" />
+                                        </Button>
+                                      </DropdownMenuTrigger>
+                                      <DropdownMenuContent align="end">
+                                        <DropdownMenuItem onClick={() => setReinvestDialog({ open: true, shareholder: group.shareholder, entry: eg.entry })}>
+                                          <RefreshCw className="size-3.5 mr-2" /> Reinvest
+                                        </DropdownMenuItem>
+                                      </DropdownMenuContent>
+                                    </DropdownMenu>
+                                  </div>
                                 </td>
                               </tr>
 
@@ -634,7 +653,7 @@ export function FundCapTableView({
                     <td colSpan={2} className="py-2 px-3 text-muted-foreground">Total</td>
                     <td className="py-2 px-3 text-right tabular-nums">{fmtCurrency(totalCommitted, currencyCode)}</td>
                     <td className="py-2 px-3 text-right tabular-nums">{totalCalled > 0 ? fmtCurrency(totalCalled, currencyCode) : "—"}</td>
-                    <td className="py-2 px-3 text-right tabular-nums">{fmtCurrency(totalCommitted - totalCalled, currencyCode)}</td>
+                    <td className="py-2 px-3 text-right tabular-nums">{totalCommitted > totalCalled ? fmtCurrency(totalCommitted - totalCalled, currencyCode) : "—"}</td>
                     <td className="py-2 px-3 text-right tabular-nums">{totalDeployed > 0 ? fmtCurrency(totalDeployed, currencyCode) : "—"}</td>
                     <td className="py-2 px-3 text-right tabular-nums">{totalPending > 0 ? fmtCurrency(totalPending, currencyCode) : "—"}</td>
                     <td></td>
@@ -657,6 +676,20 @@ export function FundCapTableView({
         currencyCode={currencyCode}
         onSaved={load}
       />
+
+      {reinvestDialog.shareholder && reinvestDialog.entry && (
+        <ReinvestDialog
+          open={reinvestDialog.open}
+          onClose={() => setReinvestDialog({ open: false, shareholder: null, entry: null })}
+          shareholder={reinvestDialog.shareholder}
+          entry={reinvestDialog.entry}
+          fundId={fundId}
+          fundEntityUUID={entityUUID}
+          shareClasses={shareClasses}
+          currencyCode={currencyCode}
+          onSuccess={load}
+        />
+      )}
 
       <AddFundInvestorDialog
         open={addInvestorOpen}

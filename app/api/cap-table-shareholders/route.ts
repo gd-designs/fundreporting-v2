@@ -24,17 +24,30 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json()
 
-  // If an email is provided, check if it belongs to an existing user and auto-link
+  // If an email is provided, find or create a user and auto-link to the shareholder
   if (body.email) {
-    const checkRes = await fetch(`${process.env.PLATFORM_API_URL}/user/check-email`, {
+    const base = process.env.PLATFORM_API_URL!
+    const h = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }
+    const checkRes = await fetch(`${base}/user/check-email`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      headers: h,
       body: JSON.stringify({ email: body.email }),
     })
     if (checkRes.ok) {
       const checkData: { exists: boolean; user?: { id: number } } = await checkRes.json()
       if (checkData.exists && checkData.user?.id != null) {
         body.user = checkData.user.id
+      } else {
+        // Create a passwordless user so reinvestments and portfolio lookups work
+        const createRes = await fetch(`${base}/user`, {
+          method: "POST",
+          headers: h,
+          body: JSON.stringify({ name: body.name ?? body.email, email: body.email }),
+        })
+        if (createRes.ok) {
+          const newUser: { id: number } = await createRes.json()
+          body.user = newUser.id
+        }
       }
     }
   }

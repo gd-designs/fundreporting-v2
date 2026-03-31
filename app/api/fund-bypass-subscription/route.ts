@@ -31,6 +31,8 @@ type AssetRecord = {
   investable?: string | null;
   currency?: number | null;
   cap_table_shareholder?: string | null;
+  cap_table_entry?: string | null;
+  fund?: string | null;
   name?: string | null;
 };
 
@@ -426,11 +428,10 @@ export async function POST(req: NextRequest) {
         );
         if (cashAsset) investorCashAssetId = cashAsset.id;
       }
-      const fundInvAsset = invAssets.find(
-        (a) =>
-          a.investable === "equity_stake" &&
-          a.cap_table_shareholder === fundSh.id,
-      );
+      // Prefer lookup by entry (most precise), fall back to shareholder
+      const fundInvAsset =
+        invAssets.find((a) => a.investable === "equity_stake" && a.cap_table_entry === entry.id) ??
+        invAssets.find((a) => a.investable === "equity_stake" && a.cap_table_shareholder === fundSh.id)
       if (fundInvAsset) fundInvestmentAssetId = fundInvAsset.id;
     }
 
@@ -454,11 +455,15 @@ export async function POST(req: NextRequest) {
         const fundInv: { id: string } = await createFundInvRes.json();
         fundInvestmentAssetId = fundInv.id;
 
-        // PATCH cap_table_shareholder separately (not in POST data block)
+        // Link asset to entry, shareholder, and fund for full traceability
         await fetch(`${base}/asset/${fundInv.id}`, {
           method: "PATCH",
           headers: h,
-          body: JSON.stringify({ cap_table_shareholder: fundSh.id }),
+          body: JSON.stringify({
+            cap_table_shareholder: fundSh.id,
+            cap_table_entry: entry.id,
+            ...(fundId ? { fund: fundId } : {}),
+          }),
         });
       }
     }
