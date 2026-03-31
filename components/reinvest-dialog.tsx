@@ -82,7 +82,7 @@ export function ReinvestDialog({
 
       setDate(new Date())
       setEntryFee("0")
-      setMarkDeployed(true)
+      setMarkDeployed(false)
       setError(null)
     }
   }, [open, shareClasses])
