@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { Trash2, CheckCircle2 } from "lucide-react"
+import { notifyLiabilitiesUpdate } from "@/lib/ledger-events"
 import { useRouter, usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { fetchEntityLiabilities, type Liability } from "@/lib/liabilities"
@@ -338,7 +339,7 @@ export function LiabilitiesManager({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ liabilitiesValue: totalOutstanding }),
     }).catch(() => {})
-    window.dispatchEvent(new CustomEvent("liabilities:update", { detail: { entityUUID, value: totalOutstanding } }))
+    notifyLiabilitiesUpdate(entityUUID, totalOutstanding)
   }, [loading, entityUUID, totalOutstanding]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const avgRate = liabilities.length > 0

@@ -57,6 +57,7 @@ import {
 } from "@/components/ui/sidebar"
 import type { CurrentUser } from "@/lib/auth"
 import type { EntityType, UnifiedEntity } from "@/lib/types"
+import { getCachedEntityStats } from "@/lib/ledger-events"
 
 const NAV_ITEMS = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
@@ -632,8 +633,14 @@ export function AppSidebar({ user, entities: initialEntities, ...props }: AppSid
   const [liabilitiesValue, setLiabilitiesValue] = React.useState<number | null>(null)
   const netWorth = assetsValue !== null ? assetsValue - (liabilitiesValue ?? 0) : null
   React.useEffect(() => {
-    setAssetsValue(null)
-    setLiabilitiesValue(null)
+    if (entityUUID) {
+      const cached = getCachedEntityStats(entityUUID)
+      setAssetsValue(cached.assets)
+      setLiabilitiesValue(cached.liabilities)
+    } else {
+      setAssetsValue(null)
+      setLiabilitiesValue(null)
+    }
     const onAssets = (e: Event) => {
       const { entityUUID: eu, value } = (e as CustomEvent<{ entityUUID: string; value: number }>).detail
       if (eu === entityUUID) setAssetsValue(value)

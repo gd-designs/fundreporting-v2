@@ -1,9 +1,19 @@
 "use client"
 
 import * as React from "react"
-import { TrendingUp, TrendingDown, BarChart3 } from "lucide-react"
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts"
+import { Plus, Pencil, Trash2, BarChart3, ChevronDown, ChevronRight } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { fetchEntityTransactions, type EntityTransaction, type TransactionLeg } from "@/lib/entity-transactions"
+import { fetchEntityLiabilities, type Liability } from "@/lib/liabilities"
+import { AddPnlItemDialog, type PnlItem, type PnlCategory, PNL_CATEGORY_LABELS } from "@/components/add-pnl-item-dialog"
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -13,32 +23,36 @@ type FundPeriod = {
   status?: "open" | "closed" | null
   opened_at?: number | null
   closed_at?: number | null
-  nav_start?: number | null
-  nav_gross_end?: number | null
-  nav_end?: number | null
-  total_shares_start?: number | null
-  total_shares_end?: number | null
-  total_aum_start?: number | null
-  total_aum_end?: number | null
-  total_invested_assets?: number | null
-  total_debt?: number | null
-  pnl_costs?: number | null
-  yield_gross?: number | null
-  yield_net?: number | null
-  management_fee_per_share?: number | null
   management_fee_total?: number | null
-  notes?: string | null
+  pnl_costs?: number | null
+  nav_start?: number | null
+  nav_end?: number | null
+  nav_gross_end?: number | null
+  total_shares_start?: number | null
 }
 
-type FundMutation = {
+// Entry types that map to each P&L category
+const REVENUE_ENTRY_TYPES = new Set(["income", "dividend", "distribution", "rental_income", "rental", "revenue", "interest_received"])
+const COGS_ENTRY_TYPES = new Set(["expense", "cost", "insurance", "maintenance", "repair", "property_expense", "direct_cost"])
+const OPEX_ENTRY_TYPES = new Set(["fee", "management_fee", "admin_fee", "operating_expense", "professional_fee", "administration"])
+const INTEREST_ENTRY_TYPES = new Set(["interest", "interest_income", "interest_expense", "interest_paid"])
+
+type LineItem = {
   id: string
-  period?: string | null
-  type?: "subscription" | "redemption" | "distribution" | null
-  amount_invested?: number | null
-  amount_returned?: number | null
-  amount_distributed?: number | null
-  shares_issued?: number | null
-  shares_redeemed?: number | null
+  label: string
+  amount: number // always positive
+  source: "transaction" | "period" | "liability" | "manual"
+  sourceLabel?: string
+  date?: number | null
+  manualItem?: PnlItem
+}
+
+type PnlData = {
+  grossRevenue: LineItem[]
+  cogs: LineItem[]
+  operatingExpenses: LineItem[]
+  interestIncome: LineItem[]
+  interestExpense: LineItem[]
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -46,12 +60,6 @@ type FundMutation = {
 function fmtCcy(n: number | null | undefined, code: string) {
   if (n == null) return "—"
   return new Intl.NumberFormat("en-GB", { style: "currency", currency: code, maximumFractionDigits: 0 }).format(n)
-}
-
-function fmtPct(n: number | null | undefined) {
-  if (n == null) return "—"
-  const pct = n * 100
-  return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`
 }
 
 function fmtDate(ts: number | null | undefined) {
@@ -63,80 +71,134 @@ function periodLabel(p: FundPeriod, idx: number) {
   return p.label ?? `Period ${idx + 1}`
 }
 
-/** Gross income = value the fund created before management fees */
-function grossIncome(p: FundPeriod): number | null {
-  if (p.nav_gross_end == null || p.nav_start == null || p.total_shares_start == null) return null
-  return (p.nav_gross_end - p.nav_start) * p.total_shares_start
+function sum(items: LineItem[]) {
+  return items.reduce((s, i) => s + i.amount, 0)
 }
 
-/** Net income = value after management fees */
-function netIncome(p: FundPeriod): number | null {
-  if (p.nav_end == null || p.nav_start == null || p.total_shares_start == null) return null
-  return (p.nav_end - p.nav_start) * p.total_shares_start
+/** Annualised interest for a liability prorated over a date range (ms timestamps) */
+function liabilityInterestForRange(l: Liability, fromMs: number, toMs: number): number {
+  if (!l.loan_amount || !l.interest_rate) return 0
+  const years = (toMs - fromMs) / (365.25 * 24 * 3600 * 1000)
+  return l.loan_amount * (l.interest_rate / 100) * years
 }
 
-// ─── P&L Statement Line ───────────────────────────────────────────────────────
+function categorizeLeg(leg: TransactionLeg): PnlCategory | null {
+  const t = leg.entryType.toLowerCase().replace(/\s+/g, "_")
+  if (leg.direction === "in" && REVENUE_ENTRY_TYPES.has(t)) return "gross_revenue"
+  if (leg.direction === "in" && INTEREST_ENTRY_TYPES.has(t)) return "interest_income"
+  if (leg.direction === "out" && INTEREST_ENTRY_TYPES.has(t)) return "interest_expense"
+  if (leg.direction === "out" && COGS_ENTRY_TYPES.has(t)) return "cogs"
+  if (leg.direction === "out" && OPEX_ENTRY_TYPES.has(t)) return "operating_expense"
+  return null
+}
 
-function StatementLine({
-  label,
-  value,
-  code,
-  indent = false,
-  bold = false,
-  separator = false,
-  colorize = false,
-  muted = false,
+function txDateInRange(tx: EntityTransaction, fromMs: number | null, toMs: number | null) {
+  if (fromMs == null || toMs == null) return true
+  return tx.date >= fromMs && tx.date <= toMs
+}
+
+// ─── Section component ────────────────────────────────────────────────────────
+
+function PnlSection({
+  title,
+  color,
+  items,
+  total,
+  currencyCode,
+  onAdd,
+  onEdit,
+  onDelete,
 }: {
-  label: string
-  value: number | null
-  code: string
-  indent?: boolean
-  bold?: boolean
-  separator?: boolean
-  colorize?: boolean
-  muted?: boolean
+  title: string
+  color: string
+  items: LineItem[]
+  total: number
+  currencyCode: string
+  onAdd: () => void
+  onEdit: (item: PnlItem) => void
+  onDelete: (id: string) => void
 }) {
-  const formatted = fmtCcy(value, code)
-  const positive = value != null && value >= 0
-  const valueColor = colorize
-    ? value == null ? "text-muted-foreground" : positive ? "text-emerald-600" : "text-red-600"
-    : muted ? "text-muted-foreground" : "text-foreground"
+  const [expanded, setExpanded] = React.useState(true)
 
   return (
-    <div className={`flex items-center justify-between py-2 ${separator ? "border-t mt-1" : "border-b border-border/40"} ${bold ? "font-semibold" : ""}`}>
-      <span className={`text-sm ${indent ? "pl-4 text-muted-foreground" : ""} ${bold ? "text-foreground" : ""}`}>
-        {label}
-      </span>
-      <span className={`text-sm tabular-nums font-medium ${valueColor}`}>
-        {formatted}
-      </span>
+    <div>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className={`w-full flex items-center justify-between px-3 py-1.5 rounded text-[10px] font-bold tracking-widest text-white uppercase mt-4 mb-1 ${color}`}
+      >
+        <span className="flex items-center gap-1.5">
+          {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+          {title}
+        </span>
+        <span className="tabular-nums font-semibold text-[11px]">{fmtCcy(total, currencyCode)}</span>
+      </button>
+
+      {expanded && (
+        <div className="flex flex-col">
+          {items.length === 0 && (
+            <div className="flex items-center justify-between py-1.5 border-b border-border/40">
+              <span className="text-sm text-muted-foreground pl-4">No items</span>
+            </div>
+          )}
+          {items.map((item) => (
+            <div key={item.id} className="flex items-center gap-2 py-1.5 border-b border-border/40 group">
+              <div className="flex-1 min-w-0 pl-4">
+                <span className="text-sm">{item.label}</span>
+                <span className="ml-2 text-[10px] text-muted-foreground">
+                  {item.source === "transaction" && "Transaction"}
+                  {item.source === "period" && "Fund period"}
+                  {item.source === "liability" && "Liability"}
+                  {item.source === "manual" && "Manual"}
+                  {item.sourceLabel ? ` · ${item.sourceLabel}` : ""}
+                  {item.date ? ` · ${fmtDate(item.date)}` : ""}
+                </span>
+              </div>
+              <span className="text-sm tabular-nums font-medium shrink-0">
+                {fmtCcy(item.amount, currencyCode)}
+              </span>
+              {item.source === "manual" && item.manualItem && (
+                <div className="hidden group-hover:flex items-center gap-1 shrink-0">
+                  <button
+                    className="text-muted-foreground hover:text-foreground"
+                    onClick={() => onEdit(item.manualItem!)}
+                  >
+                    <Pencil className="size-3" />
+                  </button>
+                  <button
+                    className="text-muted-foreground hover:text-destructive"
+                    onClick={() => onDelete(item.id)}
+                  >
+                    <Trash2 className="size-3" />
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={onAdd}
+            className="flex items-center gap-1.5 py-1.5 pl-4 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <Plus className="size-3" />
+            Add item
+          </button>
+        </div>
+      )}
     </div>
   )
 }
 
-function SectionHeader({ label, color = "bg-slate-700" }: { label: string; color?: string }) {
-  return (
-    <div className={`px-3 py-1 rounded text-[10px] font-bold tracking-widest text-white uppercase mt-4 mb-1 ${color}`}>
-      {label}
-    </div>
-  )
-}
+// ─── Subtotal row ─────────────────────────────────────────────────────────────
 
-// ─── Summary Card ─────────────────────────────────────────────────────────────
-
-function SummaryCard({ label, value, sub, positive }: { label: string; value: string; sub?: string; positive?: boolean | null }) {
+function SubtotalRow({ label, value, currencyCode, highlight = false }: { label: string; value: number; currencyCode: string; highlight?: boolean }) {
+  const positive = value >= 0
   return (
-    <div className="rounded-xl border p-4 flex flex-col gap-1 bg-card">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <div className="flex items-end gap-2">
-        <p className="text-xl font-semibold tabular-nums">{value}</p>
-        {positive != null && (
-          positive
-            ? <TrendingUp className="size-4 text-emerald-500 mb-0.5" />
-            : <TrendingDown className="size-4 text-red-500 mb-0.5" />
-        )}
-      </div>
-      {sub && <p className="text-xs text-muted-foreground">{sub}</p>}
+    <div className={`flex items-center justify-between py-2 border-t mt-1 ${highlight ? "border-t-2 border-foreground/20" : ""}`}>
+      <span className={`text-sm font-semibold ${highlight ? "text-base" : ""}`}>{label}</span>
+      <span className={`text-sm tabular-nums font-bold ${highlight ? "text-base" : ""} ${value === 0 ? "text-muted-foreground" : positive ? "text-emerald-600" : "text-red-600"}`}>
+        {fmtCcy(value, currencyCode)}
+      </span>
     </div>
   )
 }
@@ -151,33 +213,155 @@ export function FundPnlClient({
   currencyCode?: string
 }) {
   const [periods, setPeriods] = React.useState<FundPeriod[]>([])
-  const [mutations, setMutations] = React.useState<FundMutation[]>([])
+  const [transactions, setTransactions] = React.useState<EntityTransaction[]>([])
+  const [liabilities, setLiabilities] = React.useState<Liability[]>([])
+  const [manualItems, setManualItems] = React.useState<PnlItem[]>([])
   const [loading, setLoading] = React.useState(true)
-  const [selectedPeriodId, setSelectedPeriodId] = React.useState<string | "all">("all")
 
-  React.useEffect(() => {
-    async function load() {
-      setLoading(true)
-      try {
-        const [pRes, mRes] = await Promise.all([
-          fetch(`/api/fund-periods?entity=${entityUUID}`),
-          fetch(`/api/fund-mutations?entity=${entityUUID}`),
-        ])
-        const [pData, mData] = await Promise.all([
-          pRes.ok ? pRes.json() : [],
-          mRes.ok ? mRes.json() : [],
-        ])
-        const sorted = [...(Array.isArray(pData) ? pData : [])].sort(
-          (a: FundPeriod, b: FundPeriod) => (a.opened_at ?? 0) - (b.opened_at ?? 0)
-        )
-        setPeriods(sorted)
-        setMutations(Array.isArray(mData) ? mData : [])
-      } finally {
-        setLoading(false)
+  const [selectedPeriodId, setSelectedPeriodId] = React.useState<string | "all">("all")
+  const [addDialogOpen, setAddDialogOpen] = React.useState(false)
+  const [addDefaultCategory, setAddDefaultCategory] = React.useState<PnlCategory>("gross_revenue")
+  const [editItem, setEditItem] = React.useState<PnlItem | null>(null)
+
+  const load = React.useCallback(async () => {
+    setLoading(true)
+    try {
+      const [pRes, txs, liabs, itemsRes] = await Promise.all([
+        fetch(`/api/fund-periods?entity=${entityUUID}`).then((r) => r.ok ? r.json() : []),
+        fetchEntityTransactions(entityUUID).catch(() => []),
+        fetchEntityLiabilities(entityUUID).catch(() => []),
+        fetch(`/api/pnl-items?entity=${entityUUID}`).then((r) => r.ok ? r.json() : []),
+      ])
+      const sorted = [...(Array.isArray(pRes) ? pRes : [])].sort(
+        (a: FundPeriod, b: FundPeriod) => (a.opened_at ?? 0) - (b.opened_at ?? 0)
+      )
+      setPeriods(sorted)
+      setTransactions(Array.isArray(txs) ? txs : [])
+      setLiabilities(Array.isArray(liabs) ? liabs : [])
+      setManualItems(Array.isArray(itemsRes) ? itemsRes : [])
+    } finally {
+      setLoading(false)
+    }
+  }, [entityUUID])
+
+  React.useEffect(() => { void load() }, [load])
+
+  const closedPeriods = periods.filter((p) => p.status === "closed")
+
+  const selectedPeriod = selectedPeriodId === "all" ? null : closedPeriods.find((p) => p.id === selectedPeriodId) ?? null
+  const fromMs = selectedPeriod?.opened_at ?? null
+  const toMs = selectedPeriod?.closed_at ?? null
+
+  // ── Build P&L data ──────────────────────────────────────────────────────────
+
+  const pnl = React.useMemo<PnlData>(() => {
+    const data: PnlData = {
+      grossRevenue: [],
+      cogs: [],
+      operatingExpenses: [],
+      interestIncome: [],
+      interestExpense: [],
+    }
+
+    // 1. Transactions → categorize by entry type
+    for (const tx of transactions) {
+      if (!txDateInRange(tx, fromMs, toMs)) continue
+      for (const leg of tx.legs) {
+        const cat = categorizeLeg(leg)
+        if (!cat || leg.amount <= 0) continue
+        const item: LineItem = {
+          id: `tx-${leg.id}`,
+          label: leg.assetName || leg.objectName || leg.entryTypeLabel || leg.entryType,
+          amount: leg.amount,
+          source: "transaction",
+          sourceLabel: tx.typeName,
+          date: tx.date,
+        }
+        if (cat === "gross_revenue") data.grossRevenue.push(item)
+        else if (cat === "cogs") data.cogs.push(item)
+        else if (cat === "operating_expense") data.operatingExpenses.push(item)
+        else if (cat === "interest_income") data.interestIncome.push(item)
+        else if (cat === "interest_expense") data.interestExpense.push(item)
       }
     }
+
+    // 2. Fund period fees → Operating Expenses
+    const periodsInRange = selectedPeriodId === "all"
+      ? closedPeriods
+      : closedPeriods.filter((p) => p.id === selectedPeriodId)
+
+    const totalMgmtFee = periodsInRange.reduce((s, p) => s + (p.management_fee_total ?? 0), 0)
+    if (totalMgmtFee > 0) {
+      data.operatingExpenses.push({
+        id: "period-mgmt-total",
+        label: "Management fee",
+        amount: totalMgmtFee,
+        source: "period",
+        sourceLabel: periodsInRange.length === 1 ? (periodsInRange[0].label ?? undefined) : `${periodsInRange.length} periods`,
+      })
+    }
+
+    // 3. Liabilities → Interest Expense (prorated)
+    for (const l of liabilities) {
+      const rangeFrom = fromMs ?? (closedPeriods[0]?.opened_at ?? Date.now() - 365 * 24 * 3600 * 1000)
+      const rangeTo = toMs ?? (closedPeriods[closedPeriods.length - 1]?.closed_at ?? Date.now())
+      const interest = liabilityInterestForRange(l, rangeFrom, rangeTo)
+      if (interest > 0.01) {
+        data.interestExpense.push({
+          id: `liab-${l.id}`,
+          label: l.name ?? "Liability interest",
+          amount: Math.round(interest * 100) / 100,
+          source: "liability",
+          sourceLabel: l.interest_rate ? `${l.interest_rate}% p.a.` : undefined,
+        })
+      }
+    }
+
+    // 4. Manual items
+    for (const item of manualItems) {
+      if (item.date && fromMs && toMs) {
+        if (item.date < fromMs || item.date > toMs) continue
+      }
+      const lineItem: LineItem = {
+        id: `manual-${item.id}`,
+        label: item.label,
+        amount: item.amount,
+        source: "manual",
+        date: item.date,
+        manualItem: item,
+      }
+      if (item.category === "gross_revenue") data.grossRevenue.push(lineItem)
+      else if (item.category === "cogs") data.cogs.push(lineItem)
+      else if (item.category === "operating_expense") data.operatingExpenses.push(lineItem)
+      else if (item.category === "interest_income") data.interestIncome.push(lineItem)
+      else if (item.category === "interest_expense") data.interestExpense.push(lineItem)
+    }
+
+    return data
+  }, [transactions, liabilities, manualItems, closedPeriods, selectedPeriodId, fromMs, toMs])
+
+  // ── Computed totals ─────────────────────────────────────────────────────────
+  const totalRevenue = sum(pnl.grossRevenue)
+  const totalCogs = sum(pnl.cogs)
+  const grossProfit = totalRevenue - totalCogs
+  const totalOpEx = sum(pnl.operatingExpenses)
+  const operatingIncome = grossProfit - totalOpEx
+  const totalInterestIncome = sum(pnl.interestIncome)
+  const totalInterestExpense = sum(pnl.interestExpense)
+  const netFinancial = totalInterestIncome - totalInterestExpense
+  const netIncome = operatingIncome + netFinancial
+
+  async function deleteManualItem(itemId: string) {
+    const raw = itemId.replace("manual-", "")
+    await fetch(`/api/pnl-items/${raw}`, { method: "DELETE" })
     void load()
-  }, [entityUUID])
+  }
+
+  function openAdd(cat: PnlCategory) {
+    setAddDefaultCategory(cat)
+    setEditItem(null)
+    setAddDialogOpen(true)
+  }
 
   if (loading) {
     return (
@@ -187,14 +371,12 @@ export function FundPnlClient({
     )
   }
 
-  const closedPeriods = periods.filter((p) => p.status === "closed")
-
-  if (closedPeriods.length === 0) {
+  if (closedPeriods.length === 0 && manualItems.length === 0) {
     return (
       <div className="p-6 md:p-8 flex flex-col gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Profit &amp; Loss</h1>
-          <p className="text-sm text-muted-foreground mt-1">No closed periods yet. Close your first period in the NAV Manager to generate a P&amp;L statement.</p>
+          <p className="text-sm text-muted-foreground mt-1">Close a period in the NAV Manager to start generating your P&amp;L.</p>
         </div>
         <div className="rounded-xl border border-dashed p-10 flex flex-col items-center gap-2 text-center text-muted-foreground">
           <BarChart3 className="size-8 opacity-40" />
@@ -204,390 +386,152 @@ export function FundPnlClient({
     )
   }
 
-  // ── Selected period(s) ──────────────────────────────────────────────────────
-  const displayPeriods = selectedPeriodId === "all" ? closedPeriods : closedPeriods.filter((p) => p.id === selectedPeriodId)
-
-  // ── Aggregate across display periods ────────────────────────────────────────
-  const mutsByPeriod = new Map<string, FundMutation[]>()
-  for (const m of mutations) {
-    if (!m.period) continue
-    const arr = mutsByPeriod.get(m.period) ?? []
-    arr.push(m)
-    mutsByPeriod.set(m.period, arr)
-  }
-
-  // Aggregate P&L line items
-  let aggGrossIncome = 0
-  let aggMgmtFees = 0
-  let aggPnlCosts = 0
-  let aggNetIncome = 0
-  let allNull = true
-
-  for (const p of displayPeriods) {
-    const gi = grossIncome(p)
-    const ni = netIncome(p)
-    if (gi != null) { aggGrossIncome += gi; allNull = false }
-    if (ni != null) { aggNetIncome += ni; allNull = false }
-    aggMgmtFees += p.management_fee_total ?? 0
-    aggPnlCosts += p.pnl_costs ?? 0
-  }
-
-  const aggGrossProfit = aggGrossIncome // No COGS tracked yet
-  const aggOperatingExpenses = aggMgmtFees + aggPnlCosts
-  const aggOperatingIncome = aggGrossProfit - aggOperatingExpenses
-
-  // Mutations aggregate for context
-  const aggSubs = displayPeriods.reduce((s, p) => {
-    return s + (mutsByPeriod.get(p.id) ?? [])
-      .filter((m) => m.type === "subscription")
-      .reduce((ms, m) => ms + (m.amount_invested ?? 0), 0)
-  }, 0)
-  const aggRedems = displayPeriods.reduce((s, p) => {
-    return s + (mutsByPeriod.get(p.id) ?? [])
-      .filter((m) => m.type === "redemption")
-      .reduce((ms, m) => ms + (m.amount_returned ?? 0), 0)
-  }, 0)
-  const aggDists = displayPeriods.reduce((s, p) => {
-    return s + (mutsByPeriod.get(p.id) ?? [])
-      .filter((m) => m.type === "distribution")
-      .reduce((ms, m) => ms + (m.amount_distributed ?? 0), 0)
-  }, 0)
-
-  // Compound return across display periods
-  const compoundReturn = displayPeriods.reduce((acc, p) => {
-    if (p.yield_net == null) return acc
-    return acc * (1 + p.yield_net)
-  }, 1) - 1
-
-  // ── Chart data ───────────────────────────────────────────────────────────────
-  const chartData = closedPeriods.map((p, i) => {
-    const gi = grossIncome(p)
-    const ni = netIncome(p)
-    return {
-      name: periodLabel(p, i),
-      "Gross income": gi != null ? Math.round(gi) : null,
-      "Net income": ni != null ? Math.round(ni) : null,
-      "Operating expenses": -(p.management_fee_total ?? 0) - (p.pnl_costs ?? 0),
-    }
-  })
-
   return (
     <div className="p-6 md:p-8 flex flex-col gap-6">
-      {/* ── Page header ── */}
-      <div className="flex items-start justify-between gap-4">
+
+      {/* ── Header ── */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Profit &amp; Loss</h1>
           <p className="text-sm text-muted-foreground mt-1">
             {closedPeriods.length} closed period{closedPeriods.length !== 1 ? "s" : ""}
           </p>
         </div>
-
-        {/* Period selector */}
-        <select
-          value={selectedPeriodId}
-          onChange={(e) => setSelectedPeriodId(e.target.value)}
-          className="rounded-lg border bg-background px-3 py-1.5 text-sm"
-        >
-          <option value="all">All periods</option>
-          {closedPeriods.map((p, i) => (
-            <option key={p.id} value={p.id}>{periodLabel(p, i)}</option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          <Select value={selectedPeriodId} onValueChange={setSelectedPeriodId}>
+            <SelectTrigger className="w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All periods</SelectItem>
+              {closedPeriods.map((p, i) => (
+                <SelectItem key={p.id} value={p.id}>{periodLabel(p, i)}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button size="sm" variant="outline" onClick={() => openAdd("gross_revenue")} className="gap-1.5">
+            <Plus className="size-3.5" />
+            Add item
+          </Button>
+        </div>
       </div>
 
       {/* ── Summary cards ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <SummaryCard
-          label="Gross income"
-          value={allNull ? "—" : fmtCcy(aggGrossIncome, currencyCode)}
-          sub="Portfolio value appreciation"
-          positive={!allNull ? aggGrossIncome >= 0 : null}
-        />
-        <SummaryCard
-          label="Operating expenses"
-          value={fmtCcy(aggOperatingExpenses, currencyCode)}
-          sub={aggMgmtFees > 0 ? `${fmtCcy(aggMgmtFees, currencyCode)} mgmt fees` : undefined}
-          positive={false}
-        />
-        <SummaryCard
-          label="Net income"
-          value={allNull ? "—" : fmtCcy(aggNetIncome, currencyCode)}
-          sub={`Net return: ${fmtPct(compoundReturn)}`}
-          positive={!allNull ? aggNetIncome >= 0 : null}
-        />
-        <SummaryCard
-          label="Distributions paid"
-          value={aggDists > 0 ? fmtCcy(aggDists, currencyCode) : "—"}
-          sub={aggSubs > 0 ? `${fmtCcy(aggSubs, currencyCode)} subscribed` : undefined}
-        />
+        {[
+          { label: "Gross Revenue", value: totalRevenue, sub: `${pnl.grossRevenue.length} item${pnl.grossRevenue.length !== 1 ? "s" : ""}` },
+          { label: "Gross Profit", value: grossProfit, sub: `After COGS of ${fmtCcy(totalCogs, currencyCode)}` },
+          { label: "Operating Income", value: operatingIncome, sub: `${fmtCcy(totalOpEx, currencyCode)} operating expenses` },
+          { label: "Net Income", value: netIncome, sub: `${fmtCcy(netFinancial, currencyCode)} net financial`, highlight: true },
+        ].map(({ label, value, sub, highlight }) => (
+          <div key={label} className={`rounded-xl border p-4 flex flex-col gap-1 ${highlight ? "bg-foreground text-background" : "bg-card"}`}>
+            <p className={`text-xs ${highlight ? "text-background/70" : "text-muted-foreground"}`}>{label}</p>
+            <p className={`text-xl font-semibold tabular-nums ${highlight ? "" : value >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+              {fmtCcy(value, currencyCode)}
+            </p>
+            <p className={`text-xs ${highlight ? "text-background/60" : "text-muted-foreground"}`}>{sub}</p>
+          </div>
+        ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 items-start">
-
-        {/* ── P&L Statement ── */}
-        <div className="rounded-xl border bg-card">
-          <div className="px-5 py-4 border-b">
+      {/* ── P&L Statement ── */}
+      <div className="rounded-xl border bg-card">
+        <div className="px-5 py-4 border-b flex items-center justify-between">
+          <div>
             <p className="font-semibold text-sm">Profit &amp; Loss Statement</p>
-            {selectedPeriodId !== "all" && (() => {
-              const p = closedPeriods.find((x) => x.id === selectedPeriodId)
-              if (!p) return null
-              const from = fmtDate(p.opened_at)
-              const to = fmtDate(p.closed_at)
-              return <p className="text-xs text-muted-foreground mt-0.5">{from}{to ? ` → ${to}` : ""}</p>
-            })()}
-          </div>
-
-          <div className="px-5 py-4">
-            {/* ── INCOME ── */}
-            <SectionHeader label="Income" color="bg-emerald-700" />
-
-            <StatementLine
-              label="Portfolio income (value appreciation)"
-              value={allNull ? null : aggGrossIncome}
-              code={currencyCode}
-              indent
-              colorize
-            />
-            <StatementLine
-              label="Other income"
-              value={null}
-              code={currencyCode}
-              indent
-              muted
-            />
-
-            <StatementLine
-              label="Gross Revenue"
-              value={allNull ? null : aggGrossIncome}
-              code={currencyCode}
-              bold
-              separator
-              colorize
-            />
-
-            {/* ── COST OF INCOME ── */}
-            <SectionHeader label="Cost of Income" color="bg-orange-700" />
-
-            <StatementLine
-              label="Direct asset costs"
-              value={null}
-              code={currencyCode}
-              indent
-              muted
-            />
-
-            <StatementLine
-              label="Cost of Income"
-              value={0}
-              code={currencyCode}
-              bold
-              separator
-              muted
-            />
-
-            {/* ── GROSS PROFIT ── */}
-            <StatementLine
-              label="Gross Profit"
-              value={allNull ? null : aggGrossProfit}
-              code={currencyCode}
-              bold
-              separator
-              colorize
-            />
-
-            {/* ── OPERATING EXPENSES ── */}
-            <SectionHeader label="Operating Expenses" color="bg-red-700" />
-
-            <StatementLine
-              label="Management fees"
-              value={aggMgmtFees > 0 ? -aggMgmtFees : null}
-              code={currencyCode}
-              indent
-              colorize
-            />
-            <StatementLine
-              label="Fund costs &amp; expenses"
-              value={aggPnlCosts > 0 ? -aggPnlCosts : null}
-              code={currencyCode}
-              indent
-              colorize
-            />
-            <StatementLine
-              label="Personnel &amp; other costs"
-              value={null}
-              code={currencyCode}
-              indent
-              muted
-            />
-
-            <StatementLine
-              label="Total Operating Expenses"
-              value={aggOperatingExpenses > 0 ? -aggOperatingExpenses : null}
-              code={currencyCode}
-              bold
-              separator
-              colorize
-            />
-
-            {/* ── OPERATING INCOME ── */}
-            <StatementLine
-              label="Operating Income"
-              value={allNull ? null : aggOperatingIncome}
-              code={currencyCode}
-              bold
-              separator
-              colorize
-            />
-
-            {/* ── FINANCIAL INCOME & EXPENSES ── */}
-            <SectionHeader label="Financial Income &amp; Expenses" color="bg-blue-700" />
-
-            <StatementLine
-              label="Interest income"
-              value={null}
-              code={currencyCode}
-              indent
-              muted
-            />
-            <StatementLine
-              label="Interest expense"
-              value={null}
-              code={currencyCode}
-              indent
-              muted
-            />
-
-            <StatementLine
-              label="Net Financial Items"
-              value={null}
-              code={currencyCode}
-              bold
-              separator
-              muted
-            />
-
-            {/* ── NET INCOME ── */}
-            <div className="mt-3 pt-3 border-t-2 border-foreground/20 flex items-center justify-between">
-              <span className="font-bold text-base">Net Income</span>
-              <span className={`font-bold text-base tabular-nums ${!allNull ? (aggNetIncome >= 0 ? "text-emerald-600" : "text-red-600") : "text-muted-foreground"}`}>
-                {allNull ? "—" : fmtCcy(aggNetIncome, currencyCode)}
-              </span>
-            </div>
-
-            {/* ── Capital flows note ── */}
-            {(aggSubs > 0 || aggRedems > 0 || aggDists > 0) && (
-              <div className="mt-5 pt-4 border-t border-dashed flex flex-col gap-1.5">
-                <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Capital flows (not income)</p>
-                {aggSubs > 0 && (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Subscriptions received</span>
-                    <span className="tabular-nums text-emerald-600 font-medium">{fmtCcy(aggSubs, currencyCode)}</span>
-                  </div>
-                )}
-                {aggRedems > 0 && (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Redemptions paid</span>
-                    <span className="tabular-nums text-red-600 font-medium">−{fmtCcy(aggRedems, currencyCode)}</span>
-                  </div>
-                )}
-                {aggDists > 0 && (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Distributions paid</span>
-                    <span className="tabular-nums text-red-600 font-medium">−{fmtCcy(aggDists, currencyCode)}</span>
-                  </div>
-                )}
-              </div>
+            {selectedPeriod && (
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {fmtDate(selectedPeriod.opened_at)}{selectedPeriod.closed_at ? ` → ${fmtDate(selectedPeriod.closed_at)}` : ""}
+              </p>
             )}
           </div>
+          <p className="text-xs text-muted-foreground">
+            Auto-populated from transactions, period data &amp; liabilities
+          </p>
         </div>
 
-        {/* ── Right panel: chart + period breakdown ── */}
-        <div className="flex flex-col gap-4">
+        <div className="px-5 py-4">
 
-          {/* Income chart */}
-          {chartData.some((d) => d["Gross income"] != null) && (
-            <div className="rounded-xl border bg-card p-4">
-              <p className="text-sm font-semibold mb-3">Income by period</p>
-              <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="name" tick={{ fontSize: 10 }} />
-                  <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => fmtCcy(v, currencyCode)} width={64} />
-                  <Tooltip
-                    formatter={(v: number, name: string) => [fmtCcy(v, currencyCode), name]}
-                    contentStyle={{ fontSize: 11 }}
-                  />
-                  <ReferenceLine y={0} stroke="hsl(var(--border))" />
-                  <Bar dataKey="Gross income" fill="hsl(142 76% 36%)" radius={[3, 3, 0, 0]} />
-                  <Bar dataKey="Net income" fill="hsl(221 83% 53%)" radius={[3, 3, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
+          {/* GROSS REVENUE */}
+          <PnlSection
+            title="Gross Revenue"
+            color="bg-emerald-700"
+            items={pnl.grossRevenue}
+            total={totalRevenue}
+            currencyCode={currencyCode}
+            onAdd={() => openAdd("gross_revenue")}
+            onEdit={(item) => { setEditItem(item); setAddDialogOpen(true) }}
+            onDelete={deleteManualItem}
+          />
 
-          {/* Period summary table */}
-          <div className="rounded-xl border bg-card overflow-hidden">
-            <div className="px-4 py-3 border-b">
-              <p className="text-sm font-semibold">By period</p>
-            </div>
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b bg-muted/40 text-muted-foreground">
-                  <th className="text-left px-4 py-2 font-medium">Period</th>
-                  <th className="text-right px-4 py-2 font-medium">Gross</th>
-                  <th className="text-right px-4 py-2 font-medium">Fees</th>
-                  <th className="text-right px-4 py-2 font-medium">Net</th>
-                </tr>
-              </thead>
-              <tbody>
-                {closedPeriods.map((p, i) => {
-                  const gi = grossIncome(p)
-                  const ni = netIncome(p)
-                  return (
-                    <tr
-                      key={p.id}
-                      className={`border-b last:border-0 cursor-pointer hover:bg-muted/30 transition-colors ${selectedPeriodId === p.id ? "bg-primary/5" : ""}`}
-                      onClick={() => setSelectedPeriodId(selectedPeriodId === p.id ? "all" : p.id)}
-                    >
-                      <td className="px-4 py-2.5">
-                        <p className="font-medium text-foreground">{periodLabel(p, i)}</p>
-                        <p className="text-muted-foreground text-[10px]">
-                          {fmtDate(p.opened_at)}{p.closed_at ? ` → ${fmtDate(p.closed_at)}` : ""}
-                        </p>
-                      </td>
-                      <td className={`px-4 py-2.5 text-right tabular-nums font-medium ${gi != null ? (gi >= 0 ? "text-emerald-600" : "text-red-600") : "text-muted-foreground"}`}>
-                        {fmtCcy(gi, currencyCode)}
-                      </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">
-                        {fmtCcy(p.management_fee_total, currencyCode)}
-                      </td>
-                      <td className={`px-4 py-2.5 text-right tabular-nums font-medium ${ni != null ? (ni >= 0 ? "text-emerald-600" : "text-red-600") : "text-muted-foreground"}`}>
-                        {fmtCcy(ni, currencyCode)}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-              {closedPeriods.length > 1 && (
-                <tfoot>
-                  <tr className="bg-muted/20 border-t font-semibold">
-                    <td className="px-4 py-2.5 text-muted-foreground">Total</td>
-                    <td className={`px-4 py-2.5 text-right tabular-nums ${aggGrossIncome >= 0 ? "text-emerald-600" : "text-red-600"}`}>
-                      {allNull ? "—" : fmtCcy(aggGrossIncome, currencyCode)}
-                    </td>
-                    <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">
-                      {fmtCcy(aggMgmtFees, currencyCode)}
-                    </td>
-                    <td className={`px-4 py-2.5 text-right tabular-nums ${aggNetIncome >= 0 ? "text-emerald-600" : "text-red-600"}`}>
-                      {allNull ? "—" : fmtCcy(aggNetIncome, currencyCode)}
-                    </td>
-                  </tr>
-                </tfoot>
-              )}
-            </table>
-          </div>
+          {/* COGS */}
+          <PnlSection
+            title="Cost of Income (COGS)"
+            color="bg-orange-700"
+            items={pnl.cogs}
+            total={totalCogs}
+            currencyCode={currencyCode}
+            onAdd={() => openAdd("cogs")}
+            onEdit={(item) => { setEditItem(item); setAddDialogOpen(true) }}
+            onDelete={deleteManualItem}
+          />
+
+          {/* GROSS PROFIT */}
+          <SubtotalRow label="Gross Profit" value={grossProfit} currencyCode={currencyCode} />
+
+          {/* OPERATING EXPENSES */}
+          <PnlSection
+            title="Operating Expenses"
+            color="bg-red-700"
+            items={pnl.operatingExpenses}
+            total={totalOpEx}
+            currencyCode={currencyCode}
+            onAdd={() => openAdd("operating_expense")}
+            onEdit={(item) => { setEditItem(item); setAddDialogOpen(true) }}
+            onDelete={deleteManualItem}
+          />
+
+          {/* OPERATING INCOME */}
+          <SubtotalRow label="Operating Income" value={operatingIncome} currencyCode={currencyCode} />
+
+          {/* FINANCIAL INCOME */}
+          <PnlSection
+            title="Interest Income"
+            color="bg-blue-600"
+            items={pnl.interestIncome}
+            total={totalInterestIncome}
+            currencyCode={currencyCode}
+            onAdd={() => openAdd("interest_income")}
+            onEdit={(item) => { setEditItem(item); setAddDialogOpen(true) }}
+            onDelete={deleteManualItem}
+          />
+
+          {/* FINANCIAL EXPENSE */}
+          <PnlSection
+            title="Interest Expense"
+            color="bg-blue-900"
+            items={pnl.interestExpense}
+            total={totalInterestExpense}
+            currencyCode={currencyCode}
+            onAdd={() => openAdd("interest_expense")}
+            onEdit={(item) => { setEditItem(item); setAddDialogOpen(true) }}
+            onDelete={deleteManualItem}
+          />
+
+          {/* NET INCOME */}
+          <SubtotalRow label="Net Income" value={netIncome} currencyCode={currencyCode} highlight />
+
         </div>
       </div>
+
+      <AddPnlItemDialog
+        open={addDialogOpen}
+        onClose={() => { setAddDialogOpen(false); setEditItem(null) }}
+        entityId={entityUUID}
+        defaultCategory={addDefaultCategory}
+        existingItem={editItem}
+        onSaved={load}
+      />
     </div>
   )
 }

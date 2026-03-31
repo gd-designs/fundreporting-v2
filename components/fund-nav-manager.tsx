@@ -2598,7 +2598,7 @@ function MutationWorkflow({
       </div>
 
       {/* Step content */}
-      <div className="min-h-[180px]">
+      <div className="min-h-45">
         {activeStep === 1 && (
           <DistributionStep
             positions={positions}
