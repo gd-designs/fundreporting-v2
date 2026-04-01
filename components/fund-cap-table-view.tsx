@@ -192,6 +192,103 @@ function EditCapitalCallDialog({
   )
 }
 
+// ─── Edit Entry Dialog ────────────────────────────────────────────────────────
+
+function EditEntryDialog({
+  open,
+  onClose,
+  entry,
+  shareClasses,
+  currencyCode,
+  onSaved,
+}: {
+  open: boolean
+  onClose: () => void
+  entry: CapTableEntry | null
+  shareClasses: ShareClass[]
+  currencyCode: string
+  onSaved: () => void
+}) {
+  const [issuedAt, setIssuedAt] = React.useState<Date | undefined>()
+  const [committedAmount, setCommittedAmount] = React.useState("")
+  const [shareClass, setShareClass] = React.useState("")
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    if (open && entry) {
+      setIssuedAt(entry.issued_at ? new Date(entry.issued_at) : undefined)
+      setCommittedAmount(entry.committed_amount != null ? String(entry.committed_amount) : "")
+      setShareClass(entry.share_class ?? "")
+      setError(null)
+    }
+  }, [open, entry])
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!entry) return
+    setSaving(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/cap-table-entries/${entry.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          issued_at: issuedAt ? issuedAt.getTime() : null,
+          committed_amount: committedAmount ? Number(committedAmount) : null,
+          share_class: shareClass || null,
+        }),
+      })
+      if (!res.ok) throw new Error("Failed to save")
+      onSaved()
+      onClose()
+    } catch {
+      setError("Failed to save entry.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-sm">
+        <form onSubmit={handleSubmit}>
+          <DialogHeader>
+            <DialogTitle>Edit Entry</DialogTitle>
+          </DialogHeader>
+          <FieldGroup className="mt-4">
+            <DatePickerInput id="edit-entry-issued" label="Entry Date" value={issuedAt} onChange={setIssuedAt} />
+            <Field>
+              <FieldLabel htmlFor="edit-entry-committed">Committed Amount ({currencyCode})</FieldLabel>
+              <Input id="edit-entry-committed" type="number" min="0" step="0.01" value={committedAmount} onChange={(e) => setCommittedAmount(e.target.value)} />
+            </Field>
+            {shareClasses.length > 0 && (
+              <Field>
+                <FieldLabel>Share Class</FieldLabel>
+                <Select value={shareClass} onValueChange={setShareClass}>
+                  <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
+                  <SelectContent>
+                    {shareClasses.map((sc) => (
+                      <SelectItem key={sc.id} value={sc.id}>
+                        {sc.name ?? sc.id}{sc.current_nav != null && ` — ${fmtCurrency(sc.current_nav, currencyCode)}/share`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
+            )}
+            {error && <FieldError>{error}</FieldError>}
+          </FieldGroup>
+          <DialogFooter className="mt-4">
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+            <Button type="submit" disabled={saving}>{saving ? <SpinnerSm className="size-4" /> : "Save"}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 // ─── Data grouping ───────────────────────────────────────────────────────────
 
 type EntryGroup = {
@@ -285,6 +382,7 @@ export function FundCapTableView({
   // Keys: "sh:{id}" for shareholder rows, "entry:{id}" for entry rows
   const [expandedRows, setExpandedRows] = React.useState<Set<string>>(new Set())
   const [editDialog, setEditDialog] = React.useState<{ open: boolean; call: CapitalCall | null; entryShareClass: string | null }>({ open: false, call: null, entryShareClass: null })
+  const [editEntryDialog, setEditEntryDialog] = React.useState<{ open: boolean; entry: CapTableEntry | null }>({ open: false, entry: null })
   const [reinvestDialog, setReinvestDialog] = React.useState<{ open: boolean; shareholder: CapTableShareholder | null; entry: CapTableEntry | null }>({ open: false, shareholder: null, entry: null })
   const [addInvestorOpen, setAddInvestorOpen] = React.useState(false)
   const [addShareClassOpen, setAddShareClassOpen] = React.useState(false)
@@ -544,6 +642,10 @@ export function FundCapTableView({
                                         </Button>
                                       </DropdownMenuTrigger>
                                       <DropdownMenuContent align="end">
+                                        <DropdownMenuItem onClick={() => setEditEntryDialog({ open: true, entry: eg.entry })}>
+                                          <Pencil className="size-3.5 mr-2" /> Edit entry
+                                        </DropdownMenuItem>
+                                        <DropdownMenuSeparator />
                                         <DropdownMenuItem onClick={() => setReinvestDialog({ open: true, shareholder: group.shareholder, entry: eg.entry })}>
                                           <RefreshCw className="size-3.5 mr-2" /> Reinvest
                                         </DropdownMenuItem>
@@ -665,6 +767,15 @@ export function FundCapTableView({
         </Card>
 
       </div>
+
+      <EditEntryDialog
+        open={editEntryDialog.open}
+        onClose={() => setEditEntryDialog({ open: false, entry: null })}
+        entry={editEntryDialog.entry}
+        shareClasses={shareClasses}
+        currencyCode={currencyCode}
+        onSaved={load}
+      />
 
       <EditCapitalCallDialog
         open={editDialog.open}

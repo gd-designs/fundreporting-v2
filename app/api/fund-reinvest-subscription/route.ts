@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
   }
   const call: { id: string } = await createCallRes.json()
 
-  const callPatch: Record<string, unknown> = { received_at: subscriptionDate }
+  const callPatch: Record<string, unknown> = { called_at: subscriptionDate, received_at: subscriptionDate }
   if (shareClassId) callPatch.share_class = shareClassId
   if (feeAmount > 0) {
     callPatch.fee_amount = feeAmount
