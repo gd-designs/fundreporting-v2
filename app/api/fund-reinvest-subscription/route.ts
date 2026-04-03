@@ -59,9 +59,10 @@ export async function POST(req: NextRequest) {
   // ── Fetch existing shareholder (need name + user for investor portfolio) ──────
   const shRes = await fetch(`${base}/cap_table_shareholder/${fundShareholderId}`, { headers: h, cache: "no-store" })
   if (!shRes.ok) return NextResponse.json({ error: "Shareholder not found" }, { status: 404 })
-  const existingSh: { id: string; name?: string | null; user?: number | null } = await shRes.json()
+  const existingSh: { id: string; name?: string | null; user?: number | null; type?: string | null } = await shRes.json()
   const name = existingSh.name ?? "Investor"
   const userId: number | null = existingSh.user ?? null
+  const isCompany = existingSh.type === "company"
 
   // ── Step 1: New capital call on the EXISTING entry ────────────────────────────
   const createCallRes = await fetch(`${base}/capital_call`, {
@@ -170,105 +171,236 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── Step 4: Investor portfolio ────────────────────────────────────────────────
-  // For reinvestment: money is already in the portfolio (from prior distributions).
-  // Two entries only: cash OUT → equity IN. No "new money" entry.
-  let investorPortfolioEntityUUID: string | null = null
-  let investorCashAssetId: string | null = null
-  let fundInvestmentAssetId: string | null = null
+  // ── Step 4: Portfolio transaction chain ──────────────────────────────────────
+  const grossWire = callAmount + feeAmount
   let portfolioSkipReason: string | null = null
 
-  if (userId != null) {
-    const portfoliosRes = await fetch(`${base}/portfolio/by-owner`, {
-      method: "POST",
-      headers: h,
-      body: JSON.stringify({ owner: userId }),
-    })
-    if (portfoliosRes.ok) {
-      const portfolios: Array<{ id: string; entity: string }> = await portfoliosRes.json()
-      if (portfolios.length > 0) investorPortfolioEntityUUID = portfolios[0].entity
+  if (isCompany) {
+    // ── Company reinvest: personal portfolio → company → fund ─────────────────
+    // Chain: UBO new money IN → company equity IN → company cash IN → fund equity IN
+    // Company-to-fund transaction recorded last so cash arrives before it leaves.
+    console.log(`[reinvest] company investor — building 3-layer chain (userId=${userId})`)
+
+    let companyEntityUUID: string | null = null
+    let companyFundStakeAssetId: string | null = null
+    let companyCashAssetId: string | null = null
+
+    // Find which of the UBO's companies holds the fund equity stake for this entry
+    if (userId != null) {
+      const companiesRes = await fetch(`${base}/company/by-owner`, {
+        method: "POST",
+        headers: h,
+        body: JSON.stringify({ owner: userId }),
+      })
+      if (companiesRes.ok) {
+        const companies: Array<{ id: string }> = await companiesRes.json()
+        for (const company of companies) {
+          const assetsRes = await fetch(`${base}/asset?entity=${company.id}`, { headers: h, cache: "no-store" })
+          if (!assetsRes.ok) continue
+          const assets: AssetRecord[] = await assetsRes.json()
+          const stake = assets.find(
+            (a) => a.investable === "equity_stake" &&
+              (a.cap_table_entry === entryId || a.cap_table_shareholder === fundShareholderId)
+          )
+          if (stake) {
+            companyEntityUUID = company.id
+            companyFundStakeAssetId = stake.id
+            const cash = assets.find((a) => a.asset_class === 1 && a.investable === "investable_cash" && a.currency === currencyId)
+            if (cash) companyCashAssetId = cash.id
+            console.log(`[reinvest] found company entity=${companyEntityUUID} fundStake=${companyFundStakeAssetId}`)
+            break
+          }
+        }
+      }
     }
-    if (!investorPortfolioEntityUUID) {
-      portfolioSkipReason = "No portfolio found for investor user"
+
+    if (!companyEntityUUID) {
+      portfolioSkipReason = "Could not find company entity for this investor"
+      console.warn(`[reinvest] ${portfolioSkipReason}`)
+    } else {
+      // Create company cash asset if missing
+      if (!companyCashAssetId) {
+        console.log(`[reinvest] creating company cash asset`)
+        const currencyRes = await fetch(`${base}/currency/${currencyId}`, { headers: h, cache: "no-store" })
+        const currencyName = currencyRes.ok ? (((await currencyRes.json()) as { name?: string | null }).name ?? "Cash") : "Cash"
+        const createCashRes = await fetch(`${base}/asset`, {
+          method: "POST",
+          headers: h,
+          body: JSON.stringify({ entity: companyEntityUUID, asset_class: 1, name: currencyName, currency: currencyId, investable: "investable_cash", locked: true }),
+        })
+        if (createCashRes.ok) {
+          companyCashAssetId = ((await createCashRes.json()) as { id: string }).id
+          console.log(`[reinvest] created company cash asset id=${companyCashAssetId}`)
+        }
+      }
+
+      // Find personal portfolio
+      let personalPortfolioEntityUUID: string | null = null
+      if (userId != null) {
+        const portfoliosRes = await fetch(`${base}/portfolio/by-owner`, { method: "POST", headers: h, body: JSON.stringify({ owner: userId }) })
+        if (portfoliosRes.ok) {
+          const portfolios: Array<{ id: string; entity: string }> = await portfoliosRes.json()
+          if (portfolios.length > 0) personalPortfolioEntityUUID = portfolios[0].entity
+        }
+      }
+
+      // Look up UBO's shareholder record inside the company
+      let uboShareholderId: string | null = null
+      if (userId != null && companyEntityUUID) {
+        const lookupRes = await fetch(`${base}/cap_table_shareholder/lookup`, {
+          method: "POST",
+          headers: h,
+          body: JSON.stringify({ entity: companyEntityUUID, user_id: userId }),
+        })
+        if (lookupRes.ok) {
+          const uboSh: { id: string } | null = await lookupRes.json().catch(() => null)
+          if (uboSh?.id) uboShareholderId = uboSh.id
+        }
+        console.log(`[reinvest] UBO shareholder in company id=${uboShareholderId ?? "not found"}`)
+      }
+
+      // Find personal cash + company equity stake in personal portfolio
+      let personalCashAssetId: string | null = null
+      let companyEquityStakeAssetId: string | null = null
+
+      if (personalPortfolioEntityUUID) {
+        const personalAssetsRes = await fetch(`${base}/asset?entity=${personalPortfolioEntityUUID}`, { headers: h, cache: "no-store" })
+        if (personalAssetsRes.ok) {
+          const personalAssets: AssetRecord[] = await personalAssetsRes.json()
+          const cash = personalAssets.find((a) => a.asset_class === 1 && a.investable === "investable_cash" && a.currency === currencyId)
+          if (cash) personalCashAssetId = cash.id
+
+          // Match company equity stake by UBO shareholder ID, or fall back to name match
+          const stake =
+            (uboShareholderId ? personalAssets.find((a) => a.investable === "equity_stake" && a.cap_table_shareholder === uboShareholderId) : null) ??
+            personalAssets.find((a) => a.investable === "equity_stake" && a.name?.toLowerCase() === name.toLowerCase())
+          if (stake) companyEquityStakeAssetId = stake.id
+        }
+
+        // Create personal cash asset if missing
+        if (!personalCashAssetId) {
+          console.log(`[reinvest] creating personal cash asset`)
+          const currencyRes = await fetch(`${base}/currency/${currencyId}`, { headers: h, cache: "no-store" })
+          const currencyName = currencyRes.ok ? (((await currencyRes.json()) as { name?: string | null }).name ?? "Cash") : "Cash"
+          const createCashRes = await fetch(`${base}/asset`, {
+            method: "POST",
+            headers: h,
+            body: JSON.stringify({ entity: personalPortfolioEntityUUID, asset_class: 1, name: currencyName, currency: currencyId, investable: "investable_cash", locked: true }),
+          })
+          if (createCashRes.ok) {
+            personalCashAssetId = ((await createCashRes.json()) as { id: string }).id
+            console.log(`[reinvest] created personal cash asset id=${personalCashAssetId}`)
+          }
+        }
+
+        if (!companyEquityStakeAssetId) {
+          portfolioSkipReason = "Could not find company equity stake in personal portfolio"
+          console.warn(`[reinvest] ${portfolioSkipReason}`)
+        }
+      } else {
+        portfolioSkipReason = "No personal portfolio found for UBO"
+        console.warn(`[reinvest] ${portfolioSkipReason}`)
+      }
+
+      // ── Personal portfolio tx: new money IN + cash OUT + company equity IN ────
+      if (personalPortfolioEntityUUID && personalCashAssetId && companyEquityStakeAssetId) {
+        console.log(`[reinvest] recording personal portfolio transaction`)
+        const personalTxRes = await fetch(`${base}/transaction`, {
+          method: "POST",
+          headers: h,
+          body: JSON.stringify({ type: subscriptionTypeId, reference: `${name} — company funding`, created_by_entity: personalPortfolioEntityUUID, date: subscriptionDate }),
+        })
+        if (personalTxRes.ok) {
+          const personalTx: { id: string } = await personalTxRes.json()
+          console.log(`[reinvest] personal portfolio tx id=${personalTx.id}`)
+          await fetch(`${base}/transaction_entry`, { method: "POST", headers: h, body: JSON.stringify({ transaction: personalTx.id, entity: personalPortfolioEntityUUID, entry_type: "cash", object_type: "asset", object_id: personalCashAssetId, direction: "in", currency: currencyId, amount: grossWire, source: "new_money_in" }) })
+          await fetch(`${base}/transaction_entry`, { method: "POST", headers: h, body: JSON.stringify({ transaction: personalTx.id, entity: personalPortfolioEntityUUID, entry_type: "cash", object_type: "asset", object_id: personalCashAssetId, direction: "out", currency: currencyId, amount: grossWire, source: "asset", source_id: companyEquityStakeAssetId }) })
+          await fetch(`${base}/transaction_entry`, { method: "POST", headers: h, body: JSON.stringify({ transaction: personalTx.id, entity: personalPortfolioEntityUUID, entry_type: "equity", object_type: "asset", object_id: companyEquityStakeAssetId, direction: "in", currency: currencyId, amount: netForShares, source: "cash", source_id: personalCashAssetId }) })
+        }
+      }
+
+      // ── Company cash IN from UBO ───────────────────────────────────────────────
+      if (companyEntityUUID && companyCashAssetId && uboShareholderId) {
+        console.log(`[reinvest] recording company cash IN from UBO`)
+        const companyCashInTxRes = await fetch(`${base}/transaction`, {
+          method: "POST",
+          headers: h,
+          body: JSON.stringify({ type: subscriptionTypeId, reference: `UBO funding — ${name}`, created_by_entity: companyEntityUUID, date: subscriptionDate }),
+        })
+        if (companyCashInTxRes.ok) {
+          const companyCashInTx: { id: string } = await companyCashInTxRes.json()
+          console.log(`[reinvest] company cash IN tx id=${companyCashInTx.id}`)
+          await fetch(`${base}/transaction_entry`, { method: "POST", headers: h, body: JSON.stringify({ transaction: companyCashInTx.id, entity: companyEntityUUID, entry_type: "cash", object_type: "asset", object_id: companyCashAssetId, direction: "in", currency: currencyId, amount: grossWire, source: "cap", source_id: uboShareholderId }) })
+        }
+      }
+
+      // ── Company cash OUT → fund equity IN (last) ──────────────────────────────
+      if (companyEntityUUID && companyCashAssetId && companyFundStakeAssetId) {
+        console.log(`[reinvest] recording company → fund transaction`)
+        const companyTxRes = await fetch(`${base}/transaction`, {
+          method: "POST",
+          headers: h,
+          body: JSON.stringify({ type: subscriptionTypeId, reference: `${fundName ?? "Fund"} reinvestment`, created_by_entity: companyEntityUUID, date: subscriptionDate }),
+        })
+        if (companyTxRes.ok) {
+          const companyTx: { id: string } = await companyTxRes.json()
+          console.log(`[reinvest] company → fund tx id=${companyTx.id}`)
+          await fetch(`${base}/transaction_entry`, { method: "POST", headers: h, body: JSON.stringify({ transaction: companyTx.id, entity: companyEntityUUID, entry_type: "cash", object_type: "asset", object_id: companyCashAssetId, direction: "out", currency: currencyId, amount: grossWire, source: "asset", source_id: companyFundStakeAssetId }) })
+          await fetch(`${base}/transaction_entry`, { method: "POST", headers: h, body: JSON.stringify({ transaction: companyTx.id, entity: companyEntityUUID, entry_type: "equity", object_type: "asset", object_id: companyFundStakeAssetId, direction: "in", currency: currencyId, amount: netForShares, source: "cash", source_id: companyCashAssetId }) })
+        }
+      }
     }
+
   } else {
-    portfolioSkipReason = "Shareholder has no linked user account"
-  }
+    // ── Individual reinvest: personal portfolio → fund ────────────────────────
+    let investorPortfolioEntityUUID: string | null = null
+    let investorCashAssetId: string | null = null
+    let fundInvestmentAssetId: string | null = null
 
-  if (investorPortfolioEntityUUID) {
-    const invAssetsRes = await fetch(`${base}/asset?entity=${investorPortfolioEntityUUID}`, { headers: h, cache: "no-store" })
-    if (invAssetsRes.ok) {
-      const invAssets: AssetRecord[] = await invAssetsRes.json()
-      const cashAsset = invAssets.find((a) => a.asset_class === 1 && a.investable === "investable_cash" && a.currency === currencyId)
-      if (cashAsset) investorCashAssetId = cashAsset.id
-      // Prefer lookup by entry (precise), fall back to shareholder
-      const fundInvAsset =
-        invAssets.find((a) => a.investable === "equity_stake" && a.cap_table_entry === entryId) ??
-        invAssets.find((a) => a.investable === "equity_stake" && a.cap_table_shareholder === fundShareholderId)
-      if (fundInvAsset) fundInvestmentAssetId = fundInvAsset.id
+    if (userId != null) {
+      const portfoliosRes = await fetch(`${base}/portfolio/by-owner`, { method: "POST", headers: h, body: JSON.stringify({ owner: userId }) })
+      if (portfoliosRes.ok) {
+        const portfolios: Array<{ id: string; entity: string }> = await portfoliosRes.json()
+        if (portfolios.length > 0) investorPortfolioEntityUUID = portfolios[0].entity
+      }
+      if (!investorPortfolioEntityUUID) portfolioSkipReason = "No portfolio found for investor user"
+    } else {
+      portfolioSkipReason = "Shareholder has no linked user account"
     }
 
-    if (!fundInvestmentAssetId) {
-      portfolioSkipReason = "Could not find equity stake asset in investor portfolio"
+    if (investorPortfolioEntityUUID) {
+      const invAssetsRes = await fetch(`${base}/asset?entity=${investorPortfolioEntityUUID}`, { headers: h, cache: "no-store" })
+      if (invAssetsRes.ok) {
+        const invAssets: AssetRecord[] = await invAssetsRes.json()
+        const cashAsset = invAssets.find((a) => a.asset_class === 1 && a.investable === "investable_cash" && a.currency === currencyId)
+        if (cashAsset) investorCashAssetId = cashAsset.id
+        const fundInvAsset =
+          invAssets.find((a) => a.investable === "equity_stake" && a.cap_table_entry === entryId) ??
+          invAssets.find((a) => a.investable === "equity_stake" && a.cap_table_shareholder === fundShareholderId)
+        if (fundInvAsset) fundInvestmentAssetId = fundInvAsset.id
+      }
+      if (!fundInvestmentAssetId) portfolioSkipReason = "Could not find equity stake asset in investor portfolio"
     }
-  }
 
-  if (investorPortfolioEntityUUID && investorCashAssetId && fundInvestmentAssetId) {
-    const invTxRes = await fetch(`${base}/transaction`, {
-      method: "POST",
-      headers: h,
-      body: JSON.stringify({
-        type: subscriptionTypeId,
-        reference: `${fundName ?? "Fund"} reinvestment`,
-        created_by_entity: investorPortfolioEntityUUID,
-        date: subscriptionDate,
-      }),
-    })
-    if (invTxRes.ok) {
-      const invTx: { id: string } = await invTxRes.json()
-      const grossWire = callAmount + feeAmount
-
-      // Entry 1: New money IN — gross reinvestment amount arrives in portfolio cash
-      await fetch(`${base}/transaction_entry`, {
+    if (investorPortfolioEntityUUID && investorCashAssetId && fundInvestmentAssetId) {
+      const invTxRes = await fetch(`${base}/transaction`, {
         method: "POST",
         headers: h,
-        body: JSON.stringify({
-          transaction: invTx.id, entity: investorPortfolioEntityUUID,
-          entry_type: "cash", object_type: "asset", object_id: investorCashAssetId,
-          direction: "in", currency: currencyId, amount: grossWire,
-          source: "new_money_in",
-        }),
+        body: JSON.stringify({ type: subscriptionTypeId, reference: `${fundName ?? "Fund"} reinvestment`, created_by_entity: investorPortfolioEntityUUID, date: subscriptionDate }),
       })
-      // Entry 2: Cash OUT — gross wire leaves cash to fund investment
-      await fetch(`${base}/transaction_entry`, {
-        method: "POST",
-        headers: h,
-        body: JSON.stringify({
-          transaction: invTx.id, entity: investorPortfolioEntityUUID,
-          entry_type: "cash", object_type: "asset", object_id: investorCashAssetId,
-          direction: "out", currency: currencyId, amount: grossWire,
-          source: "asset", source_id: fundInvestmentAssetId,
-        }),
-      })
-      // Entry 3: Equity IN — net amount added to fund investment asset
-      await fetch(`${base}/transaction_entry`, {
-        method: "POST",
-        headers: h,
-        body: JSON.stringify({
-          transaction: invTx.id, entity: investorPortfolioEntityUUID,
-          entry_type: "equity", object_type: "asset", object_id: fundInvestmentAssetId,
-          direction: "in", currency: currencyId, amount: netForShares,
-          source: "cash", source_id: investorCashAssetId,
-        }),
-      })
+      if (invTxRes.ok) {
+        const invTx: { id: string } = await invTxRes.json()
+        await fetch(`${base}/transaction_entry`, { method: "POST", headers: h, body: JSON.stringify({ transaction: invTx.id, entity: investorPortfolioEntityUUID, entry_type: "cash", object_type: "asset", object_id: investorCashAssetId, direction: "in", currency: currencyId, amount: grossWire, source: "new_money_in" }) })
+        await fetch(`${base}/transaction_entry`, { method: "POST", headers: h, body: JSON.stringify({ transaction: invTx.id, entity: investorPortfolioEntityUUID, entry_type: "cash", object_type: "asset", object_id: investorCashAssetId, direction: "out", currency: currencyId, amount: grossWire, source: "asset", source_id: fundInvestmentAssetId }) })
+        await fetch(`${base}/transaction_entry`, { method: "POST", headers: h, body: JSON.stringify({ transaction: invTx.id, entity: investorPortfolioEntityUUID, entry_type: "equity", object_type: "asset", object_id: fundInvestmentAssetId, direction: "in", currency: currencyId, amount: netForShares, source: "cash", source_id: investorCashAssetId }) })
+      }
     }
   }
 
   return NextResponse.json({
     success: true,
     callId: call.id,
-    investorPortfolioEntityUUID,
-    fundInvestmentAssetId,
+    isCompany,
     portfolioSkipReason,
   })
 }

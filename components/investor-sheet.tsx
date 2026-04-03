@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/dialog";
 import { DatePickerInput } from "@/components/date-input";
 import { CapitalCallReceive } from "@/components/capital-call-receive";
+import { ShareholderDocumentsTab } from "@/components/shareholder-documents-tab";
 import {
   type CapTableShareholder,
   type CapTableFundChild,
@@ -603,6 +604,9 @@ export function InvestorSheet({
                 <TabsTrigger className="px-3" value="profile">
                   Profile
                 </TabsTrigger>
+                <TabsTrigger className="px-3" value="documents">
+                  Documents
+                </TabsTrigger>
                 <TabsTrigger className="px-3" value="outreach">
                   Outreach
                 </TabsTrigger>
@@ -969,6 +973,14 @@ export function InvestorSheet({
                     )}
                   </Button>
                 </div>
+              </TabsContent>
+
+              {/* ── Documents tab ── */}
+              <TabsContent value="documents" className="mt-4">
+                <ShareholderDocumentsTab
+                  shareholderId={shareholder.id}
+                  entityUUID={entityUUID}
+                />
               </TabsContent>
 
               {/* ── Outreach tab ── */}

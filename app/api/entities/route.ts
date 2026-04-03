@@ -63,11 +63,11 @@ export async function POST(request: Request) {
     )
   }
 
-  // Step 2: create the type-specific record
+  // Step 2: create the type-specific record (owner always included for traceability)
   const detailRes = await fetch(`${base}/${type}`, {
     method: 'POST',
     headers,
-    body: JSON.stringify({ entity: entityData.id, name, ...typeFields }),
+    body: JSON.stringify({ entity: entityData.id, name, user_id: user.id, ...typeFields }),
   })
   const detailData = await detailRes.json()
   if (!detailRes.ok) {

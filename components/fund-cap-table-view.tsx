@@ -20,6 +20,7 @@ import { AddFundInvestorDialog } from "@/components/add-fund-investor-dialog"
 import { ReinvestDialog } from "@/components/reinvest-dialog"
 import { AddShareClassDialog } from "@/components/add-share-class-dialog"
 import { EditShareClassDialog } from "@/components/edit-share-class-dialog"
+import { CapTableInvestorSheet } from "@/components/cap-table-investor-sheet"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -387,6 +388,7 @@ export function FundCapTableView({
   const [addInvestorOpen, setAddInvestorOpen] = React.useState(false)
   const [addShareClassOpen, setAddShareClassOpen] = React.useState(false)
   const [editShareClass, setEditShareClass] = React.useState<ShareClass | null>(null)
+  const [investorSheet, setInvestorSheet] = React.useState<{ open: boolean; shareholder: CapTableShareholder | null }>({ open: false, shareholder: null })
 
   async function load() {
     setLoading(true)
@@ -578,10 +580,15 @@ export function FundCapTableView({
                             </button>
                           </td>
                           <td className="py-2.5 px-3">
-                            <div>{group.shareholder.name ?? "—"}</div>
-                            {group.shareholder.email && (
-                              <div className="text-xs font-normal text-muted-foreground">{group.shareholder.email}</div>
-                            )}
+                            <button
+                              className="text-left hover:underline underline-offset-2"
+                              onClick={() => setInvestorSheet({ open: true, shareholder: group.shareholder })}
+                            >
+                              <div>{group.shareholder.name ?? "—"}</div>
+                              {group.shareholder.email && (
+                                <div className="text-xs font-normal text-muted-foreground">{group.shareholder.email}</div>
+                              )}
+                            </button>
                           </td>
                           <td className="py-2.5 px-3 text-right tabular-nums">{fmtCurrency(group.totalCommitted, currencyCode)}</td>
                           <td className="py-2.5 px-3 text-right tabular-nums">{group.totalCalled > 0 ? fmtCurrency(group.totalCalled, currencyCode) : "—"}</td>
@@ -825,6 +832,14 @@ export function FundCapTableView({
         shareClass={editShareClass}
         entityUUID={entityUUID}
         onSaved={load}
+      />
+
+      <CapTableInvestorSheet
+        shareholder={investorSheet.shareholder}
+        fundEntityUUID={entityUUID}
+        open={investorSheet.open}
+        onOpenChange={(v) => setInvestorSheet((s) => ({ ...s, open: v }))}
+        onUpdated={() => { void load() }}
       />
     </div>
   )

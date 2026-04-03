@@ -70,6 +70,12 @@ export function AddFundInvestorDialog({
   const [amFunds, setAmFunds] = React.useState<FundOption[]>([])
   const [selectedFundId, setSelectedFundId] = React.useState("")
 
+  // ── Company-as-investor ──
+  type CompanyOption = { entityId: string; companyId: string; name: string }
+  const [companies, setCompanies] = React.useState<CompanyOption[]>([])
+  const [selectedCompanyEntityId, setSelectedCompanyEntityId] = React.useState<string>("") // "" = create new
+  const [companiesLoading, setCompaniesLoading] = React.useState(false)
+
   // ── Investment ──
   const [shareClassId, setShareClassId] = React.useState("")
   const [committedAmount, setCommittedAmount] = React.useState("")
@@ -116,7 +122,7 @@ export function AddFundInvestorDialog({
   // Reset on open
   React.useEffect(() => {
     if (open) {
-      setEmail(""); setName(""); setType("individual"); setSelectedFundId("")
+      setEmail(""); setName(""); setType("individual"); setSelectedFundId(""); setCompanies([]); setSelectedCompanyEntityId("")
       setShareClassId(""); setCommittedAmount("")
       setRecordMode("paid"); setSubscriptionDate(new Date()); setCallAmount(""); setEntryFeeRate(""); setMarkDeployed(false)
       setError(null)
@@ -140,6 +146,26 @@ export function AddFundInvestorDialog({
     const fee = sc?._share_class_fee?.find((f) => f.type === "entry")
     setEntryFeeRate(fee?.rate != null ? String(fee.rate * 100) : "")
   }, [shareClassId, shareClasses])
+
+  // Load companies when type=company and email is filled
+  React.useEffect(() => {
+    if (type !== "company" || !email.trim()) {
+      setCompanies([])
+      setSelectedCompanyEntityId("")
+      return
+    }
+    setCompaniesLoading(true)
+    fetch(`/api/companies-by-email?email=${encodeURIComponent(email.trim())}`)
+      .then((r) => r.ok ? r.json() : [])
+      .then((list: CompanyOption[]) => {
+        setCompanies(list)
+        // Auto-select if only one company
+        if (list.length === 1) setSelectedCompanyEntityId(list[0].entityId)
+        else setSelectedCompanyEntityId("")
+      })
+      .catch(() => setCompanies([]))
+      .finally(() => setCompaniesLoading(false))
+  }, [email, type]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync committed → call amount (always mirrors unless user overrides)
   React.useEffect(() => {
@@ -186,12 +212,17 @@ export function AddFundInvestorDialog({
       // Paid/bypass mode: single server-side endpoint handles the full chain
       if (recordMode === "paid" && netAmount && amEntityUUID) {
         const entryFee = sc?._share_class_fee?.find((f) => f.type === "entry")
-        const res = await fetch("/api/fund-bypass-subscription", {
+        // Company investors route through a dedicated endpoint that creates the company entity
+        const endpoint = type === "company"
+          ? "/api/fund-company-subscription"
+          : "/api/fund-bypass-subscription"
+        const res = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             email: email.trim() || undefined,
             name: name.trim(),
+            ...(type === "company" && selectedCompanyEntityId && selectedCompanyEntityId !== "__new__" ? { companyEntityUUID: selectedCompanyEntityId } : {}),
             type,
             fundEntityUUID,
             amEntityUUID,
@@ -351,7 +382,9 @@ export function AddFundInvestorDialog({
               ) : (
                 <>
                   <Field>
-                    <FieldLabel htmlFor="fi-email">Email</FieldLabel>
+                    <FieldLabel htmlFor="fi-email">
+                      {type === "company" ? "UBO email" : "Email"}
+                    </FieldLabel>
                     <Input
                       id="fi-email"
                       type="email"
@@ -359,17 +392,54 @@ export function AddFundInvestorDialog({
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                     />
+                    {type === "company" && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        The beneficial owner&apos;s email — used to create or find their user account and personal portfolio.
+                      </p>
+                    )}
                   </Field>
 
-                  <Field>
-                    <FieldLabel htmlFor="fi-name">Full name <span className="text-destructive">*</span></FieldLabel>
-                    <Input
-                      id="fi-name"
-                      placeholder="e.g. John Smith or Acme Capital Ltd"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                    />
-                  </Field>
+                  {type === "company" && companies.length > 0 ? (
+                    <Field>
+                      <FieldLabel>Company</FieldLabel>
+                      <Select
+                        value={selectedCompanyEntityId}
+                        onValueChange={(v) => {
+                          setSelectedCompanyEntityId(v)
+                          if (v && v !== "__new__") {
+                            const c = companies.find((c) => c.entityId === v)
+                            if (c) setName(c.name)
+                          } else {
+                            setName("")
+                          }
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder={companiesLoading ? "Loading…" : "Select company…"} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {companies.map((c) => (
+                            <SelectItem key={c.entityId} value={c.entityId}>{c.name}</SelectItem>
+                          ))}
+                          <SelectItem value="__new__">+ Create new company</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                  ) : null}
+
+                  {(type !== "company" || selectedCompanyEntityId === "" || selectedCompanyEntityId === "__new__") && (
+                    <Field>
+                      <FieldLabel htmlFor="fi-name">
+                        {type === "company" ? "Company name" : "Full name"} <span className="text-destructive">*</span>
+                      </FieldLabel>
+                      <Input
+                        id="fi-name"
+                        placeholder={type === "company" ? "e.g. Acme Capital Ltd" : "e.g. John Smith"}
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                      />
+                    </Field>
+                  )}
                 </>
               )}
             </section>
