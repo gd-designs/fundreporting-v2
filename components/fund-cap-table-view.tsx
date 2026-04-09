@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useSearchParams } from "next/navigation"
 import { ChevronDown, ChevronRight, MoreHorizontal, Lock, Pencil, Plus, Trash2, UserPlus, RefreshCw } from "lucide-react"
 import {
   fetchCapitalCalls,
@@ -409,6 +410,15 @@ export function FundCapTableView({
   }
 
   React.useEffect(() => { void load() }, [entityUUID])
+
+  // Auto-open the investor sheet when ?cap={shareholderId} is in the URL
+  const searchParams = useSearchParams()
+  const capParam = searchParams?.get("cap")
+  React.useEffect(() => {
+    if (!capParam || shareholders.length === 0) return
+    const match = shareholders.find((s) => s.id === capParam)
+    if (match) setInvestorSheet({ open: true, shareholder: match })
+  }, [capParam, shareholders])
 
   function toggle(key: string) {
     setExpandedRows((prev) => {

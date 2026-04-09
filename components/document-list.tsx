@@ -81,12 +81,14 @@ export function DocumentList({
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
-              <button
-                onClick={() => openEdit(doc)}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                <Pencil className="size-3.5" />
-              </button>
+              {!doc.readOnly && (
+                <button
+                  onClick={() => openEdit(doc)}
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <Pencil className="size-3.5" />
+                </button>
+              )}
               {doc.file?.url && (
                 <a
                   href={doc.file.url}

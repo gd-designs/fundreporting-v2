@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
 import {
   DndContext,
@@ -331,6 +332,18 @@ function InvestorsTable({
   }, [entityId]);
 
   React.useEffect(() => { void load(); }, [load]);
+
+  // Auto-open the investor sheet when ?investor={shareholderId} is in the URL
+  const searchParams = useSearchParams();
+  const investorParam = searchParams?.get("investor");
+  React.useEffect(() => {
+    if (!investorParam || shareholders.length === 0) return;
+    const match = shareholders.find((s) => s.id === investorParam);
+    if (match) {
+      setSelectedShareholder(match);
+      setSheetOpen(true);
+    }
+  }, [investorParam, shareholders]);
 
   function toggleRow(id: string) {
     setExpandedRows((prev) => {
@@ -993,7 +1006,11 @@ export function InvestorsManager({
   const [selectedLead, setSelectedLead] = React.useState<Lead | null>(null);
   const [sheetOpen, setSheetOpen] = React.useState(false);
   const [view, setView] = React.useState<"list" | "kanban">("kanban");
-  const [tab, setTab] = React.useState<"pipeline" | "investors">("pipeline");
+  const initialSearchParams = useSearchParams();
+  const initialTabParam = initialSearchParams?.get("tab");
+  const [tab, setTab] = React.useState<"pipeline" | "investors">(
+    initialTabParam === "committed" || initialTabParam === "investors" ? "investors" : "pipeline"
+  );
   const [draggingLead, setDraggingLead] = React.useState<Lead | null>(null);
   const [gateError, setGateError] = React.useState<{
     leadName: string;

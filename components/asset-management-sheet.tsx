@@ -52,7 +52,7 @@ import {
   isCapitalTransaction,
   type EntityTransaction,
 } from "@/lib/entity-transactions";
-import { fetchDocuments, type EntityDocument } from "@/lib/documents";
+import { fetchDocuments, fetchDocumentsByShareholder, type EntityDocument } from "@/lib/documents";
 import {
   fetchMarketQuote,
   fetchMarketEodSeries,
@@ -384,21 +384,33 @@ export function AssetManagementSheet({
     if (open) void loadLedger();
   }, [asset?.id, open]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Load documents
+  // Load documents — asset's own + shareholder docs (for fund equity stakes)
   const loadDocs = React.useCallback(async () => {
     if (!asset) return;
     setDocsLoading(true);
-    fetchDocuments(asset.entityId)
-      .then((all) =>
-        setDocuments(
-          all.filter(
-            (d) => d.objectType === "asset" && d.objectId === asset.id,
-          ),
-        ),
-      )
-      .catch(() => setDocuments([]))
-      .finally(() => setDocsLoading(false));
-  }, [asset?.id, asset?.entityId]); // eslint-disable-line react-hooks/exhaustive-deps
+    try {
+      const [entityDocs, shareholderDocs] = await Promise.all([
+        fetchDocuments(asset.entityId).catch(() => []),
+        asset.capTableShareholder
+          ? fetchDocumentsByShareholder(asset.capTableShareholder).catch(() => [])
+          : Promise.resolve([] as EntityDocument[]),
+      ]);
+      const assetDocs = entityDocs.filter(
+        (d) => d.objectType === "asset" && d.objectId === asset.id,
+      );
+      // Merge + dedupe by id (in case any docs appear in both lists)
+      const seen = new Set<string>();
+      const merged: EntityDocument[] = [];
+      for (const d of [...assetDocs, ...shareholderDocs]) {
+        if (seen.has(d.id)) continue;
+        seen.add(d.id);
+        merged.push(d);
+      }
+      setDocuments(merged);
+    } finally {
+      setDocsLoading(false);
+    }
+  }, [asset?.id, asset?.entityId, asset?.capTableShareholder]); // eslint-disable-line react-hooks/exhaustive-deps
 
   React.useEffect(() => {
     if (open) void loadDocs();

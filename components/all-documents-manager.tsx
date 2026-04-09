@@ -268,6 +268,7 @@ export function AllDocumentsManager({ entities }: { entities: UnifiedEntity[] })
           const d = item as Record<string, unknown>
           if (typeof d.id !== "string") return null
           const file = (d.file_private ?? d.file) as Record<string, unknown> | null | undefined
+          const cap = d._cap as Record<string, unknown> | null | undefined
           return {
             id: d.id,
             createdAt: typeof d.created_at === "number" ? d.created_at : 0,
@@ -284,6 +285,7 @@ export function AllDocumentsManager({ entities }: { entities: UnifiedEntity[] })
                   mime: typeof file.mime === "string" ? file.mime : "",
                 }
               : null,
+            capShareholderName: cap && typeof cap.name === "string" ? cap.name : null,
           } satisfies EntityDocument
         })
         .filter((d): d is EntityDocument => d !== null)

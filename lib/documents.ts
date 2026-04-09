@@ -16,6 +16,8 @@ export type EntityDocument = {
   objectType: string
   objectId: string
   file: DocumentFile | null
+  capShareholderName: string | null
+  readOnly?: boolean
 }
 
 function mapDocument(raw: unknown): EntityDocument | null {
@@ -23,6 +25,7 @@ function mapDocument(raw: unknown): EntityDocument | null {
   const item = raw as Record<string, unknown>
   if (typeof item.id !== "string") return null
   const file = (item.file_private ?? item.file) as Record<string, unknown> | null | undefined
+  const cap = item._cap as Record<string, unknown> | null | undefined
   return {
     id: item.id,
     createdAt: typeof item.created_at === "number" ? item.created_at : 0,
@@ -39,6 +42,7 @@ function mapDocument(raw: unknown): EntityDocument | null {
           mime: typeof file.mime === "string" ? file.mime : "",
         }
       : null,
+    capShareholderName: cap && typeof cap.name === "string" ? cap.name : null,
   }
 }
 
@@ -48,6 +52,22 @@ export async function fetchDocuments(entityId: string): Promise<EntityDocument[]
   if (!res.ok) throw new Error(payload.message ?? "Failed to load documents.")
   const raw = Array.isArray(payload.documents) ? payload.documents : []
   return raw.map(mapDocument).filter((d): d is EntityDocument => d !== null)
+}
+
+export async function fetchDocumentsByShareholder(shareholderId: string): Promise<EntityDocument[]> {
+  const res = await fetch(`/api/documents/by-shareholder`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ shareholder_id: shareholderId }),
+    cache: "no-store",
+  })
+  if (!res.ok) return []
+  const payload = (await res.json()) as { documents?: unknown }
+  const raw = Array.isArray(payload.documents) ? payload.documents : []
+  return raw
+    .map(mapDocument)
+    .filter((d): d is EntityDocument => d !== null)
+    .map((d) => ({ ...d, readOnly: true }))
 }
 
 export async function patchDocument(id: string, input: { name?: string; description?: string | null; object_type?: string | null; object_id?: string | null }): Promise<void> {

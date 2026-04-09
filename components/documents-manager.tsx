@@ -49,6 +49,7 @@ const TYPE_FILTERS = [
   { value: "liability", label: "Liabilities" },
   { value: "transaction", label: "Transactions" },
   { value: "mutation", label: "Mutations" },
+  { value: "cap", label: "Cap Table" },
   { value: "document", label: "General" },
 ] as const
 
@@ -59,6 +60,7 @@ const OBJECT_TYPE_LABEL: Record<string, string> = {
   liability: "Liability",
   transaction: "Transaction",
   mutation: "Mutation",
+  cap: "Cap Table",
   document: "General",
 }
 
@@ -67,7 +69,26 @@ const OBJECT_TYPE_BADGE: Record<string, string> = {
   liability: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
   transaction: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
   mutation: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400",
+  cap: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
   document: "bg-muted text-muted-foreground",
+}
+
+function getCapHref(basePath: string, shareholderId: string): string {
+  // Fund / company / family-office → their own cap-table page.
+  // Standalone asset-manager (no fund nested) → investors page committed tab.
+  // Note: order matters — fund nested under asset-manager has both segments,
+  // so we check /fund/, /company/, /family-office/ first.
+  if (
+    basePath.includes("/fund/") ||
+    basePath.includes("/company/") ||
+    basePath.includes("/family-office/")
+  ) {
+    return `${basePath}/cap-table?cap=${shareholderId}`
+  }
+  if (basePath.includes("/asset-manager/")) {
+    return `${basePath}/investors?tab=committed&investor=${shareholderId}`
+  }
+  return `${basePath}/cap-table?cap=${shareholderId}`
 }
 
 function getObjectHref(basePath: string, objectType: string, objectId: string): string | null {
@@ -76,6 +97,7 @@ function getObjectHref(basePath: string, objectType: string, objectId: string): 
     case "liability": return `${basePath}/liabilities`
     case "transaction": return `${basePath}/transactions`
     case "mutation": return `${basePath}/mutations`
+    case "cap": return getCapHref(basePath, objectId)
     default: return null
   }
 }
@@ -172,8 +194,16 @@ function DocRow({
         <div className="flex items-center gap-2 flex-wrap">
           <p className="text-sm font-medium truncate">{doc.name}</p>
           <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${badge}`}>
-            {objectName ? `${label} · ${objectName}` : label}
+            {doc.objectType === "cap" ? label : (objectName ? `${label} · ${objectName}` : label)}
           </span>
+          {doc.objectType === "cap" && objectName && (
+            <Link
+              href={getCapHref(basePath, doc.objectId)}
+              className="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+            >
+              {objectName}
+            </Link>
+          )}
         </div>
         {doc.description && (
           <p className="text-xs text-muted-foreground truncate mt-0.5">{doc.description}</p>
@@ -230,9 +260,19 @@ function DocCard({
     <div className="flex flex-col gap-2 rounded-md border p-4 hover:bg-muted/20">
       <div className="flex items-start justify-between gap-2">
         <FileText className="size-5 shrink-0 text-muted-foreground mt-0.5" />
-        <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${badge}`}>
-          {objectName ? `${label} · ${objectName}` : label}
-        </span>
+        <div className="flex items-center gap-1 flex-wrap justify-end">
+          <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${badge}`}>
+            {doc.objectType === "cap" ? label : (objectName ? `${label} · ${objectName}` : label)}
+          </span>
+          {doc.objectType === "cap" && objectName && (
+            <Link
+              href={getCapHref(basePath, doc.objectId)}
+              className="inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+            >
+              {objectName}
+            </Link>
+          )}
+        </div>
       </div>
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium line-clamp-2">{doc.name}</p>
@@ -296,7 +336,7 @@ function DocSection({
           {docs.map((doc) => <DocRow key={doc.id} doc={doc} basePath={basePath} objectNames={objectNames} onEdit={onEdit} />)}
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {docs.map((doc) => <DocCard key={doc.id} doc={doc} basePath={basePath} objectNames={objectNames} onEdit={onEdit} />)}
         </div>
       )}
@@ -319,8 +359,10 @@ export function DocumentsManager({
   const [search, setSearch] = React.useState("")
   const [typeFilter, setTypeFilter] = React.useState<TypeFilter>("all")
   const [sort, setSort] = React.useState<"newest" | "oldest" | "name">("newest")
-  const [view, setView] = React.useState<"list" | "grid">("list")
+  const [view, setView] = React.useState<"list" | "grid">("grid")
   const [editDoc, setEditDoc] = React.useState<EntityDocument | null>(null)
+  const [page, setPage] = React.useState(0)
+  const PAGE_SIZE = 100
 
   async function load() {
     try {
@@ -331,6 +373,8 @@ export function DocumentsManager({
       setDocuments(docs)
       const names = new Map<string, string>()
       for (const a of assets) if (a.name) names.set(a.id, a.name)
+      // Cap table shareholder names come from the embedded _cap addon
+      for (const d of docs) if (d.capShareholderName) names.set(d.objectId, d.capShareholderName)
       setObjectNames(names)
     } catch {
       // silently fail — empty state covers it
@@ -363,8 +407,17 @@ export function DocumentsManager({
     })
   }, [documents, search, typeFilter, sort])
 
-  const linked = filtered.filter((d) => d.objectType !== "document")
-  const general = filtered.filter((d) => d.objectType === "document")
+  // Reset to first page whenever filters/search/sort change
+  React.useEffect(() => { setPage(0) }, [search, typeFilter, sort])
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const safePage = Math.min(page, totalPages - 1)
+  const pageStart = safePage * PAGE_SIZE
+  const pageEnd = pageStart + PAGE_SIZE
+  const pageDocs = filtered.slice(pageStart, pageEnd)
+
+  const linked = pageDocs.filter((d) => d.objectType !== "document")
+  const general = pageDocs.filter((d) => d.objectType === "document")
   const showSections = typeFilter === "all" && general.length > 0 && linked.length > 0
 
   return (
@@ -434,7 +487,7 @@ export function DocumentsManager({
 
         {/* Type filter pills */}
         <div className="flex flex-wrap gap-1.5">
-          {TYPE_FILTERS.map((f) => (
+          {TYPE_FILTERS.filter((f) => !(f.value === "cap" && basePath.includes("/portfolio/"))).map((f) => (
             <button
               key={f.value}
               onClick={() => setTypeFilter(f.value)}
@@ -468,13 +521,46 @@ export function DocumentsManager({
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
-        ) : showSections ? (
-          <div className="space-y-6">
-            <DocSection docs={linked} basePath={basePath} objectNames={objectNames} view={view} onEdit={setEditDoc} />
-            <DocSection title="General" docs={general} basePath={basePath} objectNames={objectNames} view={view} onEdit={setEditDoc} />
-          </div>
         ) : (
-          <DocSection docs={filtered} basePath={basePath} objectNames={objectNames} view={view} onEdit={setEditDoc} />
+          <>
+            {showSections ? (
+              <div className="space-y-6">
+                <DocSection docs={linked} basePath={basePath} objectNames={objectNames} view={view} onEdit={setEditDoc} />
+                <DocSection title="General" docs={general} basePath={basePath} objectNames={objectNames} view={view} onEdit={setEditDoc} />
+              </div>
+            ) : (
+              <DocSection docs={pageDocs} basePath={basePath} objectNames={objectNames} view={view} onEdit={setEditDoc} />
+            )}
+
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between gap-3 pt-2 border-t">
+                <p className="text-xs text-muted-foreground">
+                  Showing {pageStart + 1}–{Math.min(pageEnd, filtered.length)} of {filtered.length}
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={safePage === 0}
+                    onClick={() => setPage((p) => Math.max(0, p - 1))}
+                  >
+                    Previous
+                  </Button>
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    Page {safePage + 1} of {totalPages}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={safePage >= totalPages - 1}
+                    onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 
