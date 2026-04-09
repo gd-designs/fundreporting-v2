@@ -35,6 +35,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { UploadDocumentsDialog } from "@/components/upload-documents-dialog"
 import {
   fetchDocuments,
+  fetchDocumentsByShareholder,
   formatFileSize,
   patchDocument,
   type EntityDocument,
@@ -193,9 +194,15 @@ function DocRow({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 flex-wrap">
           <p className="text-sm font-medium truncate">{doc.name}</p>
-          <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${badge}`}>
-            {doc.objectType === "cap" ? label : (objectName ? `${label} · ${objectName}` : label)}
-          </span>
+          {(() => {
+            const text = doc.objectType === "cap" ? label : (objectName ? `${label} · ${objectName}` : label)
+            const className = `inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${badge} ${href ? "hover:opacity-80" : ""}`
+            return href ? (
+              <Link href={href} className={className}>{text}</Link>
+            ) : (
+              <span className={className}>{text}</span>
+            )
+          })()}
           {doc.objectType === "cap" && objectName && (
             <Link
               href={getCapHref(basePath, doc.objectId)}
@@ -261,9 +268,15 @@ function DocCard({
       <div className="flex items-start justify-between gap-2">
         <FileText className="size-5 shrink-0 text-muted-foreground mt-0.5" />
         <div className="flex items-center gap-1 flex-wrap justify-end">
-          <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${badge}`}>
-            {doc.objectType === "cap" ? label : (objectName ? `${label} · ${objectName}` : label)}
-          </span>
+          {(() => {
+            const text = doc.objectType === "cap" ? label : (objectName ? `${label} · ${objectName}` : label)
+            const className = `inline-flex items-center rounded px-1.5 py-0.5 text-xs font-medium ${badge} ${href ? "hover:opacity-80" : ""}`
+            return href ? (
+              <Link href={href} className={className}>{text}</Link>
+            ) : (
+              <span className={className}>{text}</span>
+            )
+          })()}
           {doc.objectType === "cap" && objectName && (
             <Link
               href={getCapHref(basePath, doc.objectId)}
@@ -370,11 +383,44 @@ export function DocumentsManager({
         fetchDocuments(entityUUID),
         fetchEntityAssets(entityUUID).catch(() => []),
       ])
-      setDocuments(docs)
+
+      // For any asset in this entity that has a cap_table_shareholder attached
+      // (e.g. fund equity stakes), pull in documents linked to that shareholder
+      // so they show up here too. We rewrite objectType/objectId to point at
+      // the asset so the badge reads "Asset · {asset name}" — these docs
+      // logically belong to the asset in the portfolio's view of the world.
+      // Marked readOnly by fetchDocumentsByShareholder so editing is disabled.
+      const assetsWithShareholder = assets
+        .map((a) => ({ assetId: a.id, shareholderId: a.capTableShareholder }))
+        .filter((a): a is { assetId: string; shareholderId: string } =>
+          typeof a.shareholderId === "string" && a.shareholderId.length > 0
+        )
+      const shareholderDocsLists = await Promise.all(
+        assetsWithShareholder.map(async ({ assetId, shareholderId }) => {
+          const docs = await fetchDocumentsByShareholder(shareholderId).catch(() => [])
+          return docs.map((d) => ({
+            ...d,
+            objectType: "asset",
+            objectId: assetId,
+          }))
+        })
+      )
+      const shareholderDocs = shareholderDocsLists.flat()
+
+      // Merge + dedupe by id (a doc may already be on the entity)
+      const seen = new Set<string>()
+      const merged: EntityDocument[] = []
+      for (const d of [...docs, ...shareholderDocs]) {
+        if (seen.has(d.id)) continue
+        seen.add(d.id)
+        merged.push(d)
+      }
+      setDocuments(merged)
+
       const names = new Map<string, string>()
       for (const a of assets) if (a.name) names.set(a.id, a.name)
       // Cap table shareholder names come from the embedded _cap addon
-      for (const d of docs) if (d.capShareholderName) names.set(d.objectId, d.capShareholderName)
+      for (const d of merged) if (d.capShareholderName) names.set(d.objectId, d.capShareholderName)
       setObjectNames(names)
     } catch {
       // silently fail — empty state covers it
