@@ -22,7 +22,7 @@ function mapDocument(raw: unknown): EntityDocument | null {
   if (!raw || typeof raw !== "object") return null
   const item = raw as Record<string, unknown>
   if (typeof item.id !== "string") return null
-  const file = item.file as Record<string, unknown> | null | undefined
+  const file = (item.file_private ?? item.file) as Record<string, unknown> | null | undefined
   return {
     id: item.id,
     createdAt: typeof item.created_at === "number" ? item.created_at : 0,

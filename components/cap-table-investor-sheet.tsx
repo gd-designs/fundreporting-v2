@@ -135,19 +135,7 @@ export function CapTableInvestorSheet({
                   <SheetDescription className="mt-0.5">{shareholder.email}</SheetDescription>
                 )}
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-destructive hover:text-destructive hover:bg-destructive/10 shrink-0 mt-1"
-                onClick={handleDelete}
-              >
-                <Trash2 className="size-3.5 mr-1.5" />
-                Remove
-              </Button>
             </div>
-            {deleteError && (
-              <p className="text-sm text-destructive mt-2">{deleteError}</p>
-            )}
           </SheetHeader>
 
           {/* Tabs */}
@@ -206,11 +194,23 @@ export function CapTableInvestorSheet({
                 {saveError && <FieldError>{saveError}</FieldError>}
               </FieldGroup>
 
-              <div className="mt-5">
+              <div className="mt-5 flex items-center justify-between gap-3">
                 <Button disabled={saving || !name.trim()} onClick={handleSave}>
                   {saving ? <><Spinner className="size-3.5 mr-1.5" />Saving…</> : "Save changes"}
                 </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                  onClick={handleDelete}
+                >
+                  <Trash2 className="size-3.5 mr-1.5" />
+                  Remove investor
+                </Button>
               </div>
+              {deleteError && (
+                <p className="text-sm text-destructive mt-2">{deleteError}</p>
+              )}
             </TabsContent>
 
             {/* Documents tab */}

@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Upload, Paperclip, ExternalLink, Pencil } from "lucide-react"
+import { Upload, Paperclip, ExternalLink, Pencil, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -34,7 +34,7 @@ function mapDoc(raw: unknown): Doc | null {
   if (!raw || typeof raw !== "object") return null
   const r = raw as Record<string, unknown>
   if (typeof r.id !== "string") return null
-  const f = r.file as Record<string, unknown> | null | undefined
+  const f = (r.file_private ?? r.file) as Record<string, unknown> | null | undefined
   return {
     id: r.id,
     name: typeof r.name === "string" ? r.name : "",
@@ -228,6 +228,16 @@ export function ShareholderDocumentsTab({
                     <ExternalLink className="size-3.5" />
                   </a>
                 )}
+                <button
+                  onClick={async () => {
+                    if (!confirm(`Delete "${doc.name}"?`)) return
+                    await fetch(`/api/documents/${doc.id}`, { method: "DELETE" })
+                    void load()
+                  }}
+                  className="text-muted-foreground hover:text-destructive"
+                >
+                  <Trash2 className="size-3.5" />
+                </button>
               </div>
             </div>
           ))}

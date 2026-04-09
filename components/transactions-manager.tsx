@@ -159,10 +159,14 @@ export function TransactionsManager({ entityUUID }: { entityUUID: string }) {
     setDeletingId(id)
     try {
       const res = await fetch(`/api/transactions/${id}`, { method: "DELETE" })
-      if (!res.ok) throw new Error("Failed to delete")
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({})) as { error?: string }
+        throw new Error(payload.error ?? "Failed to delete")
+      }
       setTransactions((prev) => prev.filter((t) => t.id !== id))
-    } catch {
-      // keep
+    } catch (e) {
+      console.error("[delete-transaction]", e)
+      alert(e instanceof Error ? e.message : "Failed to delete transaction")
     } finally {
       setDeletingId(null)
       setConfirmDeleteId(null)
@@ -242,8 +246,11 @@ export function TransactionsManager({ entityUUID }: { entityUUID: string }) {
                 <span className={`shrink-0 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${typeColor(tx.typeName)}`}>
                   {tx.typeName || "—"}
                 </span>
-                <span className="text-sm font-medium truncate flex-1">
+                <span className="text-sm font-medium truncate min-w-0 flex-1">
                   {tx.reference || "—"}
+                </span>
+                <span className="shrink-0 text-xs font-mono text-blue-600 bg-blue-50 px-2 py-0.5 rounded">
+                  #{tx.id}
                 </span>
                 <span className="text-xs text-muted-foreground shrink-0">
                   {formatTxDate(tx.date)}

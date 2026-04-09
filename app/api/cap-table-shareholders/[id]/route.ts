@@ -52,49 +52,15 @@ export async function DELETE(_: NextRequest, { params }: { params: Promise<{ id:
   const token = await getAuthToken()
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }
-  const base = process.env.PLATFORM_API_URL
-
-  // 1. Fetch all entries for this shareholder
-  const entriesRes = await fetch(`${base}/cap_table_entry?shareholder=${id}`, {
-    headers,
-    cache: "no-store",
-  })
-  const entries: { id: string }[] = entriesRes.ok ? await entriesRes.json() : []
-
-  if (entries.length > 0) {
-    // 2. Check if any entry has capital calls — if so, block the delete
-    const callCounts = await Promise.all(
-      entries.map(async (entry) => {
-        const callsRes = await fetch(`${base}/capital_call?cap_table_entry=${entry.id}`, {
-          headers,
-          cache: "no-store",
-        })
-        const calls: unknown[] = callsRes.ok ? await callsRes.json() : []
-        return calls.length
-      }),
-    )
-    const totalCalls = callCounts.reduce((sum, n) => sum + n, 0)
-    if (totalCalls > 0) {
-      return NextResponse.json(
-        { error: "Cannot delete this shareholder — they have capital calls recorded against their entries. Please delete the capital calls first." },
-        { status: 409 },
-      )
-    }
-
-    // 3. No capital calls — delete the entries
-    await Promise.all(
-      entries.map((entry) =>
-        fetch(`${base}/cap_table_entry/${entry.id}`, { method: "DELETE", headers }),
-      ),
-    )
-  }
-
-  // 4. Delete the shareholder
-  const res = await fetch(`${base}/cap_table_shareholder/${id}`, {
+  // Xano handles the cascade: deletes all capital_call records, all
+  // cap_table_entry records, then the shareholder itself.
+  const res = await fetch(`${process.env.PLATFORM_API_URL}/cap_table_shareholder/${id}`, {
     method: "DELETE",
-    headers,
+    headers: { Authorization: `Bearer ${token}` },
   })
-  if (!res.ok) return NextResponse.json({ error: await res.text() }, { status: res.status })
+
+  if (!res.ok) {
+    return NextResponse.json({ error: await res.text() }, { status: res.status })
+  }
   return new NextResponse(null, { status: 204 })
 }

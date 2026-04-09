@@ -267,7 +267,7 @@ export function AllDocumentsManager({ entities }: { entities: UnifiedEntity[] })
           if (!item || typeof item !== "object") return null
           const d = item as Record<string, unknown>
           if (typeof d.id !== "string") return null
-          const file = d.file as Record<string, unknown> | null | undefined
+          const file = (d.file_private ?? d.file) as Record<string, unknown> | null | undefined
           return {
             id: d.id,
             createdAt: typeof d.created_at === "number" ? d.created_at : 0,
