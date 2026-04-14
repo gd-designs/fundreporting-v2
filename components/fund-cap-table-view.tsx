@@ -296,6 +296,8 @@ function EditEntryDialog({
 type EntryGroup = {
   entry: CapTableEntry
   calls: CapitalCall[]
+  liveValue: number
+  netShares: number
 }
 
 
@@ -306,13 +308,16 @@ type ShareholderGroup = {
   totalCommitted: number
   totalCalled: number
   totalDeployed: number
-  totalPending: number
+  totalLiveValue: number
+  totalShares: number
 }
 
 function buildShareholderGroups(
   shareholders: CapTableShareholder[],
   entries: CapTableEntry[],
   calls: CapitalCall[],
+  liveValueByEntry: Map<string, number>,
+  sharesByEntry: Map<string, number>,
 ): ShareholderGroup[] {
   // Index calls by entry id
   const callsByEntry = new Map<string, CapitalCall[]>()
@@ -337,11 +342,12 @@ function buildShareholderGroups(
   }
 
   return shareholders
-    .filter((sh) => sh.type !== "fund")
     .map((sh) => {
       const entryGroups: EntryGroup[] = (entriesByShareholder.get(sh.id) ?? []).map((entry) => ({
         entry,
         calls: callsByEntry.get(entry.id) ?? [],
+        liveValue: liveValueByEntry.get(entry.id) ?? 0,
+        netShares: sharesByEntry.get(entry.id) ?? 0,
       }))
 
       const allCalls = entryGroups.flatMap((eg) => eg.calls)
@@ -353,7 +359,8 @@ function buildShareholderGroups(
         totalCommitted: Math.max(rawCommitted, totalCalled),
         totalCalled,
         totalDeployed: allCalls.filter((c) => c.deployed_at != null).reduce((s, c) => s + (c.amount ?? 0), 0),
-        totalPending: allCalls.filter((c) => c.status === "pending" || c.status === "partial").reduce((s, c) => s + (c.amount ?? 0), 0),
+        totalLiveValue: entryGroups.reduce((s, eg) => s + eg.liveValue, 0),
+        totalShares: entryGroups.reduce((s, eg) => s + eg.netShares, 0),
       }
     })
     .sort((a, b) => b.totalCommitted - a.totalCommitted)
@@ -380,6 +387,7 @@ export function FundCapTableView({
   const [entries, setEntries] = React.useState<CapTableEntry[]>([])
   const [shareholders, setShareholders] = React.useState<CapTableShareholder[]>([])
   const [shareClasses, setShareClasses] = React.useState<ShareClass[]>([])
+  const [mutations, setMutations] = React.useState<Array<{ cap_table_entry?: string | null; type?: string | null; shares_issued?: number | null; shares_redeemed?: number | null; nav_per_share?: number | null }>>([])
   const [loading, setLoading] = React.useState(true)
   // Keys: "sh:{id}" for shareholder rows, "entry:{id}" for entry rows
   const [expandedRows, setExpandedRows] = React.useState<Set<string>>(new Set())
@@ -394,16 +402,18 @@ export function FundCapTableView({
   async function load() {
     setLoading(true)
     try {
-      const [c, en, sh, sc] = await Promise.all([
+      const [c, en, sh, sc, muts] = await Promise.all([
         fetchCapitalCalls(entityUUID),
         fetchCapTableEntries(entityUUID),
         fetchCapTableShareholders(entityUUID),
         fetchShareClasses(entityUUID),
+        fetch(`/api/fund-mutations?entity=${entityUUID}`).then((r) => r.ok ? r.json() : []).catch(() => []),
       ])
       setCalls(c)
       setEntries(en)
       setShareholders(sh)
       setShareClasses(sc)
+      setMutations(Array.isArray(muts) ? muts : [])
     } finally {
       setLoading(false)
     }
@@ -434,13 +444,60 @@ export function FundCapTableView({
     void load()
   }
 
-  const groups = buildShareholderGroups(shareholders, entries, calls)
-  const fundInvestors = shareholders.filter((sh) => sh.type === "fund")
+  // Net shares per entry from fund_mutation records
+  const sharesByEntryMap = React.useMemo(() => {
+    const result = new Map<string, number>()
+    for (const m of mutations) {
+      const entryId = m.cap_table_entry
+      if (!entryId) continue
+      const delta = (m.shares_issued ?? 0) - (m.shares_redeemed ?? 0)
+      result.set(entryId, (result.get(entryId) ?? 0) + delta)
+    }
+    return result
+  }, [mutations])
+
+  // Live value per entry = net shares * current share class NAV.
+  // Falls back to deployed amount when no mutations exist (e.g. legacy or migration data).
+  const liveValueByEntry = React.useMemo(() => {
+    const result = new Map<string, number>()
+    for (const entry of entries) {
+      const sc = shareClasses.find((s) => s.id === entry.share_class)
+      const nav = sc?.current_nav ?? null
+      const netShares = sharesByEntryMap.get(entry.id) ?? 0
+      if (nav != null && netShares > 0) {
+        result.set(entry.id, netShares * nav)
+      } else {
+        // Fallback: deployed amount on this entry
+        const deployedOnEntry = calls
+          .filter((c) => c.cap_table_entry === entry.id && c.deployed_at != null)
+          .reduce((s, c) => s + (c.amount ?? 0), 0)
+        result.set(entry.id, deployedOnEntry)
+      }
+    }
+    return result
+  }, [sharesByEntryMap, entries, shareClasses, calls])
+
+  const groups = buildShareholderGroups(shareholders, entries, calls, liveValueByEntry, sharesByEntryMap)
 
   const totalCommitted = groups.reduce((s, g) => s + g.totalCommitted, 0)
   const totalCalled = calls.reduce((s, c) => s + (c.amount ?? 0), 0)
   const totalDeployed = calls.filter((c) => c.deployed_at != null).reduce((s, c) => s + (c.amount ?? 0), 0)
-  const totalPending = calls.filter((c) => c.status === "pending" || c.status === "partial").reduce((s, c) => s + (c.amount ?? 0), 0)
+
+  // Total live value = total shares across all entries × their share class current_nav
+  const totalLiveValue = React.useMemo(() => {
+    let total = 0
+    for (const entry of entries) {
+      const sc = shareClasses.find((s) => s.id === entry.share_class)
+      const nav = sc?.current_nav ?? null
+      const netShares = sharesByEntryMap.get(entry.id) ?? 0
+      if (nav != null && netShares > 0) {
+        total += netShares * nav
+      }
+    }
+    return total
+  }, [sharesByEntryMap, entries, shareClasses])
+
+  const totalShares = groups.reduce((s, g) => s + g.totalShares, 0)
 
   if (loading) {
     return (
@@ -450,24 +507,41 @@ export function FundCapTableView({
     )
   }
 
-  const isEmpty = groups.length === 0 && fundInvestors.length === 0
+  const isEmpty = groups.length === 0
 
   return (
     <div className="p-6 md:p-8">
       <div className="flex flex-col gap-6">
 
         {/* Stats */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-          {[
-            { label: "Investors", value: String(groups.length + fundInvestors.length) },
-            { label: "Committed", value: fmtCurrency(totalCommitted, currencyCode) },
-            { label: "Called", value: fmtCurrency(totalCalled, currencyCode) },
-            { label: "Deployed", value: fmtCurrency(totalDeployed, currencyCode) },
-            { label: "Awaiting payment", value: fmtCurrency(totalPending, currencyCode) },
-          ].map((s) => (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          {(() => {
+            // Current NAV: weighted average across share classes (weighted by shares in each class)
+            const currentNav = totalShares > 0 ? totalLiveValue / totalShares : (shareClasses[0]?.current_nav ?? null)
+            const gl = totalDeployed > 0 ? totalLiveValue - totalDeployed : null
+            return [
+              { label: "Investors", value: String(groups.length) },
+              { label: "Paid", value: fmtCurrency(totalCalled, currencyCode) },
+              { label: "Deployed", value: fmtCurrency(totalDeployed, currencyCode) },
+              { label: "Shares", value: totalShares > 0 ? fmt(totalShares) : "—" },
+              { label: "Current NAV", value: currentNav != null ? fmtCurrency(currentNav, currencyCode) : "—" },
+              { label: "Live value", value: fmtCurrency(totalLiveValue, currencyCode), gl, glBase: totalDeployed },
+            ]
+          })().map((s) => (
             <div key={s.label} className="rounded-lg border p-4">
               <p className="text-muted-foreground text-xs">{s.label}</p>
               <p className="mt-1 text-xl font-semibold tabular-nums">{s.value}</p>
+              {"gl" in s && s.gl != null && (s as { glBase: number }).glBase > 0 && (() => {
+                const glVal = s.gl as number
+                const base = (s as { glBase: number }).glBase
+                const pct = (glVal / base) * 100
+                const color = glVal >= 0 ? "text-emerald-600" : "text-red-600"
+                return (
+                  <p className={`text-xs tabular-nums mt-0.5 ${color}`}>
+                    {glVal >= 0 ? "+" : ""}{fmtCurrency(glVal, currencyCode)} ({glVal >= 0 ? "+" : ""}{pct.toFixed(1)}%)
+                  </p>
+                )
+              })()}
             </div>
           ))}
         </div>
@@ -531,48 +605,14 @@ export function FundCapTableView({
                     <th className="text-right py-2 px-3 font-medium">Called</th>
                     <th className="text-right py-2 px-3 font-medium">Uncalled</th>
                     <th className="text-right py-2 px-3 font-medium">Deployed</th>
-                    <th className="text-right py-2 px-3 font-medium">Awaiting</th>
+                    <th className="text-right py-2 px-3 font-medium">Shares</th>
+                    <th className="text-right py-2 px-3 font-medium">Live value</th>
                     <th className="py-2 px-3"></th>
                   </tr>
                 </thead>
                 <tbody>
 
-                  {/* ── Fund investors (reporting-only, no entries/calls) ── */}
-                  {fundInvestors.map((sh) => (
-                    <tr key={sh.id} className="border-b hover:bg-muted/30">
-                      <td className="py-2 px-3"></td>
-                      <td className="py-2 px-3">
-                        <div className="font-medium flex items-center gap-2">
-                          {sh.name ?? "—"}
-                          <span className="text-[10px] font-medium bg-violet-100 text-violet-700 rounded-full px-1.5 py-0.5">Fund</span>
-                        </div>
-                      </td>
-                      <td className="py-2 px-3 text-right text-muted-foreground text-xs" colSpan={5}>Reporting only — no capital calls</td>
-                      <td className="py-2 px-3">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="size-6">
-                              <MoreHorizontal className="size-3.5" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem
-                              className="text-destructive focus:text-destructive"
-                              onClick={async () => {
-                                if (!confirm(`Remove ${sh.name ?? "this fund"} from the cap table?`)) return
-                                await fetch(`/api/cap-table-shareholders/${sh.id}`, { method: "DELETE" })
-                                void load()
-                              }}
-                            >
-                              <Trash2 className="size-3.5 mr-2" /> Remove
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </td>
-                    </tr>
-                  ))}
-
-                  {/* ── Regular investors grouped by shareholder ── */}
+                  {/* ── All investors grouped by shareholder ── */}
                   {groups.map((group) => {
                     const shKey = `sh:${group.shareholder.id}`
                     const shExpanded = expandedRows.has(shKey)
@@ -604,7 +644,24 @@ export function FundCapTableView({
                           <td className="py-2.5 px-3 text-right tabular-nums">{group.totalCalled > 0 ? fmtCurrency(group.totalCalled, currencyCode) : "—"}</td>
                           <td className="py-2.5 px-3 text-right tabular-nums">{uncalled > 0 ? fmtCurrency(uncalled, currencyCode) : "—"}</td>
                           <td className="py-2.5 px-3 text-right tabular-nums">{group.totalDeployed > 0 ? fmtCurrency(group.totalDeployed, currencyCode) : "—"}</td>
-                          <td className="py-2.5 px-3 text-right tabular-nums">{group.totalPending > 0 ? fmtCurrency(group.totalPending, currencyCode) : "—"}</td>
+                          <td className="py-2.5 px-3 text-right tabular-nums">{group.totalShares > 0 ? fmt(group.totalShares) : "—"}</td>
+                          <td className="py-2.5 px-3 text-right tabular-nums">
+                            {group.totalLiveValue > 0 ? (
+                              <div>
+                                <div>{fmtCurrency(group.totalLiveValue, currencyCode)}</div>
+                                {group.totalDeployed > 0 && (() => {
+                                  const gl = group.totalLiveValue - group.totalDeployed
+                                  const pct = (gl / group.totalDeployed) * 100
+                                  const color = gl >= 0 ? "text-emerald-600" : "text-red-600"
+                                  return (
+                                    <div className={`text-[11px] ${color}`}>
+                                      {gl >= 0 ? "+" : ""}{fmtCurrency(gl, currencyCode)} ({gl >= 0 ? "+" : ""}{pct.toFixed(1)}%)
+                                    </div>
+                                  )
+                                })()}
+                              </div>
+                            ) : "—"}
+                          </td>
                           <td className="py-2.5 px-3 text-right">
                             <span className="text-xs font-normal text-muted-foreground">
                               {entryCount} round{entryCount !== 1 ? "s" : ""}
@@ -619,7 +676,7 @@ export function FundCapTableView({
                           const sc = shareClasses.find((s) => s.id === eg.entry.share_class)
                           const entryCalled = eg.calls.reduce((s, c) => s + (c.amount ?? 0), 0)
                           const entryDeployed = eg.calls.filter((c) => c.deployed_at != null).reduce((s, c) => s + (c.amount ?? 0), 0)
-                          const entryPending = eg.calls.filter((c) => c.status === "pending" || c.status === "partial").reduce((s, c) => s + (c.amount ?? 0), 0)
+                          const entryLiveValue = eg.liveValue
                           const entryCommitted = Math.max(eg.entry.committed_amount ?? 0, entryCalled)
                           const entryUncalled = entryCommitted - entryCalled
 
@@ -646,7 +703,24 @@ export function FundCapTableView({
                                 <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{entryCalled > 0 ? fmtCurrency(entryCalled, currencyCode) : "—"}</td>
                                 <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{entryUncalled > 0 ? fmtCurrency(entryUncalled, currencyCode) : "—"}</td>
                                 <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{entryDeployed > 0 ? fmtCurrency(entryDeployed, currencyCode) : "—"}</td>
-                                <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{entryPending > 0 ? fmtCurrency(entryPending, currencyCode) : "—"}</td>
+                                <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{eg.netShares > 0 ? fmt(eg.netShares) : "—"}</td>
+                                <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">
+                                  {entryLiveValue > 0 ? (
+                                    <div>
+                                      <div>{fmtCurrency(entryLiveValue, currencyCode)}</div>
+                                      {entryDeployed > 0 && (() => {
+                                        const gl = entryLiveValue - entryDeployed
+                                        const pct = (gl / entryDeployed) * 100
+                                        const color = gl >= 0 ? "text-emerald-600" : "text-red-600"
+                                        return (
+                                          <div className={`text-[11px] ${color}`}>
+                                            {gl >= 0 ? "+" : ""}{fmtCurrency(gl, currencyCode)} ({gl >= 0 ? "+" : ""}{pct.toFixed(1)}%)
+                                          </div>
+                                        )
+                                      })()}
+                                    </div>
+                                  ) : "—"}
+                                </td>
                                 <td className="py-2 px-3 text-right">
                                   <div className="flex items-center justify-end gap-2">
                                     <span className="text-xs text-muted-foreground">
@@ -747,7 +821,7 @@ export function FundCapTableView({
 
                               {entryExpanded && eg.calls.length === 0 && (
                                 <tr className="bg-muted/20 border-b">
-                                  <td colSpan={8} className="py-2 px-3 pl-14 text-xs text-muted-foreground">
+                                  <td colSpan={9} className="py-2 px-3 pl-14 text-xs text-muted-foreground">
                                     No capital calls for this round.
                                   </td>
                                 </tr>
@@ -758,7 +832,7 @@ export function FundCapTableView({
 
                         {shExpanded && group.entries.length === 0 && (
                           <tr className="bg-muted/10 border-b">
-                            <td colSpan={8} className="py-2 px-3 pl-8 text-xs text-muted-foreground">
+                            <td colSpan={9} className="py-2 px-3 pl-8 text-xs text-muted-foreground">
                               No investment entries recorded.
                             </td>
                           </tr>
@@ -774,7 +848,24 @@ export function FundCapTableView({
                     <td className="py-2 px-3 text-right tabular-nums">{totalCalled > 0 ? fmtCurrency(totalCalled, currencyCode) : "—"}</td>
                     <td className="py-2 px-3 text-right tabular-nums">{totalCommitted > totalCalled ? fmtCurrency(totalCommitted - totalCalled, currencyCode) : "—"}</td>
                     <td className="py-2 px-3 text-right tabular-nums">{totalDeployed > 0 ? fmtCurrency(totalDeployed, currencyCode) : "—"}</td>
-                    <td className="py-2 px-3 text-right tabular-nums">{totalPending > 0 ? fmtCurrency(totalPending, currencyCode) : "—"}</td>
+                    <td className="py-2 px-3 text-right tabular-nums">{totalShares > 0 ? fmt(totalShares) : "—"}</td>
+                    <td className="py-2 px-3 text-right tabular-nums">
+                      {totalLiveValue > 0 ? (
+                        <div>
+                          <div>{fmtCurrency(totalLiveValue, currencyCode)}</div>
+                          {totalDeployed > 0 && (() => {
+                            const gl = totalLiveValue - totalDeployed
+                            const pct = (gl / totalDeployed) * 100
+                            const color = gl >= 0 ? "text-emerald-600" : "text-red-600"
+                            return (
+                              <div className={`text-[11px] ${color}`}>
+                                {gl >= 0 ? "+" : ""}{fmtCurrency(gl, currencyCode)} ({gl >= 0 ? "+" : ""}{pct.toFixed(1)}%)
+                              </div>
+                            )
+                          })()}
+                        </div>
+                      ) : "—"}
+                    </td>
                     <td></td>
                   </tr>
                 </tfoot>

@@ -190,20 +190,36 @@ export function AddFundInvestorDialog({
     setError(null)
 
     try {
-      // Fund-as-investor: shareholder record only, no entry or call
+      // Fund-as-investor: shareholder on receiving fund + equity stake asset on the investing fund
       if (type === "fund") {
         if (!selectedFundId) { setError("Select the investing fund."); setSaving(false); return }
-        await fetch("/api/cap-table-shareholders", {
+        const investingFund = amFunds.find((f) => f.id === selectedFundId)
+        if (!investingFund?.entity) { setError("Investing fund has no entity"); setSaving(false); return }
+        const entryFee = sc?._share_class_fee?.find((f) => f.type === "entry")
+        const res = await fetch("/api/fund-as-investor", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            entity: fundEntityUUID,
+            receivingFundEntityUUID: fundEntityUUID,
+            receivingFundId: fundId,
+            investingFundId: selectedFundId,
+            investingFundEntityUUID: investingFund.entity,
             name: name.trim(),
-            type: "fund",
-            linked_fund: selectedFundId,
-            role: "investor",
+            currencyId: currencyId ?? undefined,
+            shareClassId: shareClassId || undefined,
+            shareClassFeeId: entryFee?.id || undefined,
+            committedAmount: committedAmount ? Number(committedAmount) : undefined,
+            recordMode,
+            callAmount: netAmount ?? undefined,
+            subscriptionDate: subscriptionDate ? subscriptionDate.getTime() : Date.now(),
+            entryFeeRateDecimal: feeRateDecimal,
+            markDeployed,
           }),
         })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({})) as { error?: string }
+          throw new Error(err.error ?? "Failed to add fund investor")
+        }
         onSuccess()
         onClose()
         return
@@ -363,9 +379,6 @@ export function AddFundInvestorDialog({
                         ))}
                       </SelectContent>
                     </Select>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      The fund&apos;s full value is treated as invested — no capital call is created.
-                    </p>
                   </Field>
                   {selectedFundId && (
                     <Field>
@@ -445,7 +458,7 @@ export function AddFundInvestorDialog({
             </section>
 
             {/* ── INVESTMENT ── */}
-            {type !== "fund" && <section className="flex flex-col gap-3">
+            <section className="flex flex-col gap-3">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Investment</p>
 
               <Field>
@@ -498,10 +511,10 @@ export function AddFundInvestorDialog({
                   />
                 </div>
               </Field>
-            </section>}
+            </section>
 
             {/* ── SUBSCRIPTION RECORD ── */}
-            {type !== "fund" && <section className="flex flex-col gap-3">
+            <section className="flex flex-col gap-3">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Subscription record</p>
 
               <DatePickerInput
@@ -626,7 +639,7 @@ export function AddFundInvestorDialog({
                   )}
                 </div>
               )}
-            </section>}
+            </section>
 
             {error && <FieldError>{error}</FieldError>}
           </div>

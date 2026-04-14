@@ -59,10 +59,11 @@ export async function POST(req: NextRequest) {
   // ── Fetch existing shareholder (need name + user for investor portfolio) ──────
   const shRes = await fetch(`${base}/cap_table_shareholder/${fundShareholderId}`, { headers: h, cache: "no-store" })
   if (!shRes.ok) return NextResponse.json({ error: "Shareholder not found" }, { status: 404 })
-  const existingSh: { id: string; name?: string | null; user?: number | null; type?: string | null } = await shRes.json()
+  const existingSh: { id: string; name?: string | null; user?: number | null; type?: string | null; linked_fund?: string | null } = await shRes.json()
   const name = existingSh.name ?? "Investor"
   const userId: number | null = existingSh.user ?? null
   const isCompany = existingSh.type === "company"
+  const isFund = existingSh.type === "fund"
 
   // ── Step 1: New capital call on the EXISTING entry ────────────────────────────
   const createCallRes = await fetch(`${base}/capital_call`, {
@@ -351,6 +352,59 @@ export async function POST(req: NextRequest) {
       }
     }
 
+  } else if (isFund) {
+    // ── Fund reinvest: investing fund entity → receiving fund ─────────────────
+    // The investing fund holds the equity stake. Cash OUT + equity IN on that entity.
+    console.log(`[reinvest] fund investor — linked_fund=${existingSh.linked_fund}`)
+
+    let investingFundEntityUUID: string | null = null
+    let investingFundCashAssetId: string | null = null
+    let fundEquityStakeAssetId: string | null = null
+
+    // Resolve investing fund entity from linked_fund (fund record id → entity UUID)
+    if (existingSh.linked_fund) {
+      const fundRecordRes = await fetch(`${base}/fund/${existingSh.linked_fund}`, { headers: h, cache: "no-store" })
+      if (fundRecordRes.ok) {
+        const fundRecord = (await fundRecordRes.json()) as { entity?: string | null }
+        investingFundEntityUUID = typeof fundRecord.entity === "string" ? fundRecord.entity : null
+      }
+    }
+
+    if (investingFundEntityUUID) {
+      const invAssetsRes = await fetch(`${base}/asset?entity=${investingFundEntityUUID}`, { headers: h, cache: "no-store" })
+      if (invAssetsRes.ok) {
+        const invAssets: AssetRecord[] = await invAssetsRes.json()
+        const cash = invAssets.find((a) => a.asset_class === 1 && a.investable === "investable_cash" && a.currency === currencyId)
+        if (cash) investingFundCashAssetId = cash.id
+        const stake =
+          invAssets.find((a) => a.investable === "equity_stake" && a.cap_table_entry === entryId) ??
+          invAssets.find((a) => a.investable === "equity_stake" && a.cap_table_shareholder === fundShareholderId)
+        if (stake) fundEquityStakeAssetId = stake.id
+      }
+      console.log(`[reinvest] investing fund entity=${investingFundEntityUUID} cash=${investingFundCashAssetId} stake=${fundEquityStakeAssetId}`)
+
+      if (investingFundCashAssetId && fundEquityStakeAssetId) {
+        // Investing fund tx: cash OUT + equity IN
+        const txRes = await fetch(`${base}/transaction`, {
+          method: "POST",
+          headers: h,
+          body: JSON.stringify({ type: subscriptionTypeId, reference: `${fundName ?? "Fund"} reinvestment`, created_by_entity: investingFundEntityUUID, date: subscriptionDate }),
+        })
+        if (txRes.ok) {
+          const tx: { id: string } = await txRes.json()
+          console.log(`[reinvest] investing fund tx id=${tx.id}`)
+          await fetch(`${base}/transaction_entry`, { method: "POST", headers: h, body: JSON.stringify({ transaction: tx.id, entity: investingFundEntityUUID, entry_type: "cash", object_type: "asset", object_id: investingFundCashAssetId, direction: "out", currency: currencyId, amount: grossWire, source: "asset", source_id: fundEquityStakeAssetId }) })
+          await fetch(`${base}/transaction_entry`, { method: "POST", headers: h, body: JSON.stringify({ transaction: tx.id, entity: investingFundEntityUUID, entry_type: "equity", object_type: "asset", object_id: fundEquityStakeAssetId, direction: "in", currency: currencyId, amount: netForShares, source: "cash", source_id: investingFundCashAssetId }) })
+        }
+      } else {
+        portfolioSkipReason = !investingFundCashAssetId ? "No cash asset on investing fund" : "No equity stake asset found on investing fund"
+        console.warn(`[reinvest] fund skip: ${portfolioSkipReason}`)
+      }
+    } else {
+      portfolioSkipReason = "Could not resolve investing fund entity"
+      console.warn(`[reinvest] fund skip: ${portfolioSkipReason}`)
+    }
+
   } else {
     // ── Individual reinvest: personal portfolio → fund ────────────────────────
     let investorPortfolioEntityUUID: string | null = null
@@ -401,6 +455,7 @@ export async function POST(req: NextRequest) {
     success: true,
     callId: call.id,
     isCompany,
+    isFund,
     portfolioSkipReason,
   })
 }

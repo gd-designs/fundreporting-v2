@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { ArrowDownLeft, ArrowUpRight, Paperclip, Plus, Trash2 } from "lucide-react"
+import { AddTransactionDialog } from "@/components/add-transaction-dialog"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -213,10 +214,12 @@ export function TransactionsManager({ entityUUID }: { entityUUID: string }) {
       <div className="rounded-lg border">
         <div className="flex items-center justify-between px-4 py-3 border-b">
           <p className="font-semibold text-sm">All Transactions</p>
-          <Button size="sm" className="h-8 gap-1.5 text-xs">
-            <Plus className="size-3.5" />
-            Add transaction
-          </Button>
+          <AddTransactionDialog entityUUID={entityUUID} onSuccess={() => void load()}>
+            <Button size="sm" className="h-8 gap-1.5 text-xs">
+              <Plus className="size-3.5" />
+              Add transaction
+            </Button>
+          </AddTransactionDialog>
         </div>
 
         {loading && (

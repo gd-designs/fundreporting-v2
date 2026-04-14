@@ -8,6 +8,7 @@ import {
   ArchiveRestore,
   ArrowDownLeft,
   ArrowLeftRight,
+  Banknote,
   GripVertical,
   HelpCircle,
   Paperclip,
@@ -19,6 +20,7 @@ import { AddAssetDialog } from "@/components/add-asset-dialog"
 import { BuySellDialog } from "@/components/buy-sell-dialog"
 import { MoneyInDialog } from "@/components/money-in-dialog"
 import { RevalueDialog } from "@/components/revalue-dialog"
+import { DistributionDialog } from "@/components/distribution-dialog"
 import { AddAssetToSheetDialog } from "@/components/add-asset-to-sheet-dialog"
 import { AssetManagementSheet } from "@/components/asset-management-sheet"
 import { CreateSectionDialog } from "@/components/create-section-dialog"
@@ -305,18 +307,49 @@ export function AssetsManager({ entityUUID, baseCurrency: baseCurrencyProp, allo
     void loadQuotes()
   }, [assets])
 
-  // Compute live stake values: ownershipPct (from embedded data) × company live NAV
+  // Compute live stake values for equity_stake assets.
+  // Fund stakes: use fund_mutation share records (net shares × share_class.current_nav).
+  // Non-fund stakes (companies etc.): use ownershipPct × company live NAV.
   React.useEffect(() => {
     const stakeAssets = assets.filter(
-      (a) => a.capTableShareholder && a.ownershipPct != null && a.shareholderEntityId
+      (a) => a.capTableShareholder && a.investable === "equity_stake"
     )
     if (stakeAssets.length === 0) {
       setStakeValuesByAsset(new Map())
       return
     }
-    // Deduplicate company entities to avoid redundant fetches
-    const uniqueEntities = Array.from(new Set(stakeAssets.map((a) => a.shareholderEntityId!)))
+
+    // Split into fund-based stakes (have fundId + shareholderEntityId) vs non-fund
+    const fundStakes = stakeAssets.filter((a) => a.fundId && a.shareholderEntityId)
+    const nonFundStakes = stakeAssets.filter((a) => !a.fundId && a.ownershipPct != null && a.shareholderEntityId)
+
     const load = async () => {
+      const next = new Map<string, number>()
+
+      // Fund stakes: compute from fund_mutation shares × current_nav
+      await Promise.all(
+        fundStakes.map(async (asset) => {
+          try {
+            const params = new URLSearchParams({
+              shareholder: asset.capTableShareholder!,
+              fundEntity: asset.shareholderEntityId!,
+            })
+            const res = await fetch(`/api/cap-table-stake-value-by-shares?${params}`)
+            if (res.ok) {
+              const data = (await res.json()) as { value?: number }
+              if (typeof data.value === "number" && data.value > 0) {
+                next.set(asset.id, data.value)
+                return
+              }
+            }
+          } catch { /* ignore */ }
+          // Fallback to book value
+          if (asset.stakeValue != null) next.set(asset.id, asset.stakeValue)
+        })
+      )
+
+      // Non-fund stakes: compute from ownershipPct × company live NAV
+      const uniqueEntities = Array.from(new Set(nonFundStakes.map((a) => a.shareholderEntityId!)))
       const navByEntity = new Map<string, number>()
       await Promise.all(
         uniqueEntities.map(async (entityUUID) => {
@@ -331,16 +364,15 @@ export function AssetsManager({ entityUUID, baseCurrency: baseCurrencyProp, allo
           } catch { /* ignore */ }
         })
       )
-      const next = new Map<string, number>()
-      for (const asset of stakeAssets) {
+      for (const asset of nonFundStakes) {
         const nav = navByEntity.get(asset.shareholderEntityId!)
         if (nav != null && asset.ownershipPct != null) {
           next.set(asset.id, asset.ownershipPct * nav)
         } else if (asset.stakeValue != null) {
-          // fallback to book value if NAV fetch failed
           next.set(asset.id, asset.stakeValue)
         }
       }
+
       setStakeValuesByAsset(next)
     }
     void load()
@@ -1351,6 +1383,21 @@ export function AssetsManager({ entityUUID, baseCurrency: baseCurrencyProp, allo
                                     Revalue
                                   </DropdownMenuItem>
                                 </RevalueDialog>
+                              )}
+                              {!isSoldAsset && asset.investable !== "investable_cash" && cashAssets.length > 0 && (
+                                <DistributionDialog
+                                  entityUUID={entityUUID}
+                                  assetId={asset.id}
+                                  assetName={asset.name ?? "Asset"}
+                                  cashAssets={cashAssets.map((c) => ({ id: c.id, name: c.name, currencyCode: c.currencyCode }))}
+                                  defaultCurrencyId={asset.currencyId ?? undefined}
+                                  onSuccess={() => void loadAssets()}
+                                >
+                                  <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
+                                    <Banknote className="size-3.5" />
+                                    Distribution
+                                  </DropdownMenuItem>
+                                </DistributionDialog>
                               )}
                             </>
                           )}

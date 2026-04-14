@@ -92,7 +92,9 @@ export async function POST(req: NextRequest) {
     body: JSON.stringify({ deployed_at: mutation_at }),
   })
 
-  // ── 3. Find investor portfolio via shareholder → user ─────────────────────
+  // ── 3. Find the entity that holds the equity_stake asset for this shareholder ──
+  // Fund-type investors → equity stake lives on the investing fund's entity.
+  // Individual/company investors → equity stake lives on their personal portfolio.
   console.log("[fund-subscribe-mutation] shares_issued:", shares_issued, "fundShareholderId:", fundShareholderId)
 
   if (shares_issued == null || shares_issued <= 0) {
@@ -104,69 +106,78 @@ export async function POST(req: NextRequest) {
     headers: h,
     cache: "no-store",
   })
-  console.log("[fund-subscribe-mutation] shareholder fetch status:", shRes.status)
   if (!shRes.ok) {
-    return NextResponse.json({ success: true, mutationId: mutation.id, portfolioRecorded: false, _skip: "sh_fetch_failed", _shStatus: shRes.status })
+    return NextResponse.json({ success: true, mutationId: mutation.id, portfolioRecorded: false, _skip: "sh_fetch_failed" })
   }
-  const shareholder: { user?: number | null; parent_shareholder?: string | null } = await shRes.json()
-  let userId = shareholder.user ?? null
-  console.log("[fund-subscribe-mutation] shareholder.user:", userId, "parent_shareholder:", shareholder.parent_shareholder)
+  const shareholder: { type?: string | null; user?: number | null; parent_shareholder?: string | null; linked_fund?: string | null } = await shRes.json()
+  const isFundInvestor = shareholder.type === "fund"
+  console.log("[fund-subscribe-mutation] shareholder type:", shareholder.type, "linked_fund:", shareholder.linked_fund)
 
-  // Fund-level shareholder may not have user — try AM-level parent shareholder
-  if (userId == null && shareholder.parent_shareholder) {
-    const parentRes = await fetch(`${base}/cap_table_shareholder/${shareholder.parent_shareholder}`, {
-      headers: h,
-      cache: "no-store",
-    })
-    if (parentRes.ok) {
-      const parent: { user?: number | null } = await parentRes.json()
-      userId = parent.user ?? null
-      console.log("[fund-subscribe-mutation] parent shareholder.user:", userId)
+  let investorEntityUUID: string | null = null
+
+  if (isFundInvestor && shareholder.linked_fund) {
+    // Fund investor: equity stake lives on the investing fund's entity.
+    // linked_fund is the fund record id — we need the entity UUID.
+    const fundRes = await fetch(`${base}/fund/${shareholder.linked_fund}`, { headers: h, cache: "no-store" })
+    if (fundRes.ok) {
+      const fund = (await fundRes.json()) as { entity?: string | null }
+      investorEntityUUID = typeof fund.entity === "string" ? fund.entity : null
     }
+    console.log("[fund-subscribe-mutation] fund investor entity:", investorEntityUUID)
+  } else {
+    // Individual/company: equity stake lives on the personal portfolio.
+    let userId = shareholder.user ?? null
+
+    // Fund-level shareholder may not have user — try AM-level parent shareholder
+    if (userId == null && shareholder.parent_shareholder) {
+      const parentRes = await fetch(`${base}/cap_table_shareholder/${shareholder.parent_shareholder}`, {
+        headers: h,
+        cache: "no-store",
+      })
+      if (parentRes.ok) {
+        const parent: { user?: number | null } = await parentRes.json()
+        userId = parent.user ?? null
+      }
+    }
+    console.log("[fund-subscribe-mutation] user:", userId)
+
+    if (userId != null) {
+      const portfoliosRes = await fetch(`${base}/portfolio/by-owner`, {
+        method: "POST",
+        headers: h,
+        body: JSON.stringify({ owner: userId }),
+      })
+      if (portfoliosRes.ok) {
+        const portfolios: Array<{ entity: string }> = await portfoliosRes.json()
+        investorEntityUUID = portfolios[0]?.entity ?? null
+      }
+    }
+    console.log("[fund-subscribe-mutation] portfolio entity:", investorEntityUUID)
   }
 
-  if (userId == null) {
-    return NextResponse.json({ success: true, mutationId: mutation.id, portfolioRecorded: false, _skip: "no_user_on_shareholder" })
+  if (!investorEntityUUID) {
+    return NextResponse.json({ success: true, mutationId: mutation.id, portfolioRecorded: false, _skip: isFundInvestor ? "no_investing_fund_entity" : "no_portfolio" })
   }
 
-  const portfoliosRes = await fetch(`${base}/portfolio/by-owner`, {
-    method: "POST",
-    headers: h,
-    body: JSON.stringify({ owner: userId }),
-  })
-  console.log("[fund-subscribe-mutation] portfolio/by-owner status:", portfoliosRes.status)
-  if (!portfoliosRes.ok) {
-    return NextResponse.json({ success: true, mutationId: mutation.id, portfolioRecorded: false, _skip: "portfolio_fetch_failed", _portfolioStatus: portfoliosRes.status })
-  }
-  const portfolios: Array<{ id: string; entity: string }> = await portfoliosRes.json()
-  const portfolioEntityUUID = portfolios[0]?.entity ?? null
-  console.log("[fund-subscribe-mutation] portfolioEntityUUID:", portfolioEntityUUID)
-
-  if (!portfolioEntityUUID) {
-    return NextResponse.json({ success: true, mutationId: mutation.id, portfolioRecorded: false, _skip: "no_portfolio", userId })
-  }
-
-  const assetsRes = await fetch(`${base}/asset?entity=${portfolioEntityUUID}`, {
+  // ── 4. Find the equity_stake asset on that entity ──────────────────────────
+  const assetsRes = await fetch(`${base}/asset?entity=${investorEntityUUID}`, {
     headers: h,
     cache: "no-store",
   })
-  console.log("[fund-subscribe-mutation] assets fetch status:", assetsRes.status)
   if (!assetsRes.ok) {
     return NextResponse.json({ success: true, mutationId: mutation.id, portfolioRecorded: false, _skip: "assets_fetch_failed" })
   }
   const assets: AssetRecord[] = await assetsRes.json()
-  console.log("[fund-subscribe-mutation] assets:", assets.map(a => ({ id: a.id, investable: a.investable, cap_table_shareholder: a.cap_table_shareholder })))
   const fundAsset = assets.find(
     (a) => a.investable === "equity_stake" && a.cap_table_shareholder === fundShareholderId,
   )
-  console.log("[fund-subscribe-mutation] fundAsset:", fundAsset ?? "NOT FOUND")
+  console.log("[fund-subscribe-mutation] fundAsset:", fundAsset?.id ?? "NOT FOUND", "on entity:", investorEntityUUID)
 
   if (!fundAsset) {
-    return NextResponse.json({ success: true, mutationId: mutation.id, portfolioRecorded: false, _skip: "no_equity_stake_asset", fundShareholderId, _assets: assets.map(a => ({ id: a.id, investable: a.investable, cap_table_shareholder: a.cap_table_shareholder })) })
+    return NextResponse.json({ success: true, mutationId: mutation.id, portfolioRecorded: false, _skip: "no_equity_stake_asset", fundShareholderId })
   }
 
   // ── 5. Record transaction entry with units + price_per_unit ───────────────
-  // Find subscription transaction type
   let subscriptionTypeId: number | null = null
   const ttRes = await fetch(`${base}/transaction_type`, { headers: h, cache: "no-store" })
   if (ttRes.ok) {
@@ -182,12 +193,12 @@ export async function POST(req: NextRequest) {
     body: JSON.stringify({
       type: subscriptionTypeId,
       reference: `Fund subscription — ${shares_issued.toFixed(4)} shares @ ${nav_per_share}`,
-      created_by_entity: portfolioEntityUUID,
+      created_by_entity: investorEntityUUID,
       date: mutation_at,
     }),
   })
   if (!txRes.ok) {
-    return NextResponse.json({ success: true, mutationId: mutation.id, portfolioRecorded: false })
+    return NextResponse.json({ success: true, mutationId: mutation.id, portfolioRecorded: false, _skip: "tx_create_failed" })
   }
   const tx: { id: string } = await txRes.json()
 
@@ -196,7 +207,7 @@ export async function POST(req: NextRequest) {
     headers: h,
     body: JSON.stringify({
       transaction: tx.id,
-      entity: portfolioEntityUUID,
+      entity: investorEntityUUID,
       entry_type: "equity",
       object_type: "asset",
       object_id: fundAsset.id,
@@ -210,5 +221,6 @@ export async function POST(req: NextRequest) {
     }),
   })
 
-  return NextResponse.json({ success: true, mutationId: mutation.id, portfolioRecorded: true })
+  console.log("[fund-subscribe-mutation] ✓ recorded on entity:", investorEntityUUID, "asset:", fundAsset.id)
+  return NextResponse.json({ success: true, mutationId: mutation.id, portfolioRecorded: true, investorEntityUUID })
 }

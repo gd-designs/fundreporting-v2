@@ -37,11 +37,29 @@ const COGS_ENTRY_TYPES = new Set(["expense", "cost", "insurance", "maintenance",
 const OPEX_ENTRY_TYPES = new Set(["fee", "management_fee", "admin_fee", "operating_expense", "professional_fee", "administration"])
 const INTEREST_ENTRY_TYPES = new Set(["interest", "interest_income", "interest_expense", "interest_paid"])
 
+type FundFee = {
+  id: string
+  entity?: string | null
+  period?: string | null
+  cap_table_entry?: string | null
+  amount?: number | null
+  fee_per_share?: number | null
+  shares_outstanding?: number | null
+  status?: "accrued" | "paid" | null
+  accrued_at?: number | null
+  _cap_table_entry?: {
+    id: string
+    _shareholder?: { id: string; name?: string | null } | null
+  } | null
+  _period?: { id: string; label?: string | null } | null
+  _share_class_fee?: { id: string; type?: string | null; rate?: number | null; basis?: string | null } | null
+}
+
 type LineItem = {
   id: string
   label: string
   amount: number // always positive
-  source: "transaction" | "period" | "liability" | "manual"
+  source: "transaction" | "period" | "liability" | "manual" | "fee"
   sourceLabel?: string
   date?: number | null
   manualItem?: PnlItem
@@ -148,6 +166,7 @@ function PnlSection({
                 <span className="ml-2 text-[10px] text-muted-foreground">
                   {item.source === "transaction" && "Transaction"}
                   {item.source === "period" && "Fund period"}
+                  {item.source === "fee" && "Fund fee"}
                   {item.source === "liability" && "Liability"}
                   {item.source === "manual" && "Manual"}
                   {item.sourceLabel ? ` · ${item.sourceLabel}` : ""}
@@ -216,6 +235,7 @@ export function FundPnlClient({
   const [transactions, setTransactions] = React.useState<EntityTransaction[]>([])
   const [liabilities, setLiabilities] = React.useState<Liability[]>([])
   const [manualItems, setManualItems] = React.useState<PnlItem[]>([])
+  const [fundFees, setFundFees] = React.useState<FundFee[]>([])
   const [loading, setLoading] = React.useState(true)
 
   const [selectedPeriodId, setSelectedPeriodId] = React.useState<string | "all">("all")
@@ -226,11 +246,12 @@ export function FundPnlClient({
   const load = React.useCallback(async () => {
     setLoading(true)
     try {
-      const [pRes, txs, liabs, itemsRes] = await Promise.all([
+      const [pRes, txs, liabs, itemsRes, feesRes] = await Promise.all([
         fetch(`/api/fund-periods?entity=${entityUUID}`).then((r) => r.ok ? r.json() : []),
         fetchEntityTransactions(entityUUID).catch(() => []),
         fetchEntityLiabilities(entityUUID).catch(() => []),
         fetch(`/api/pnl-items?entity=${entityUUID}`).then((r) => r.ok ? r.json() : []),
+        fetch(`/api/fund-fees?entity=${entityUUID}`).then((r) => r.ok ? r.json() : []),
       ])
       const sorted = [...(Array.isArray(pRes) ? pRes : [])].sort(
         (a: FundPeriod, b: FundPeriod) => (a.opened_at ?? 0) - (b.opened_at ?? 0)
@@ -239,6 +260,7 @@ export function FundPnlClient({
       setTransactions(Array.isArray(txs) ? txs : [])
       setLiabilities(Array.isArray(liabs) ? liabs : [])
       setManualItems(Array.isArray(itemsRes) ? itemsRes : [])
+      setFundFees(Array.isArray(feesRes) ? feesRes : [])
     } finally {
       setLoading(false)
     }
@@ -285,19 +307,29 @@ export function FundPnlClient({
       }
     }
 
-    // 2. Fund period fees → Operating Expenses
+    // 2. Fund fees → Operating Expenses (per investor from fund_fee records)
     const periodsInRange = selectedPeriodId === "all"
       ? closedPeriods
       : closedPeriods.filter((p) => p.id === selectedPeriodId)
+    const periodIdsInRange = new Set(periodsInRange.map((p) => p.id))
 
-    const totalMgmtFee = periodsInRange.reduce((s, p) => s + (p.management_fee_total ?? 0), 0)
-    if (totalMgmtFee > 0) {
+    const feesInRange = selectedPeriodId === "all"
+      ? fundFees
+      : fundFees.filter((f) => f.period && periodIdsInRange.has(f.period))
+
+    for (const fee of feesInRange) {
+      const amount = fee.amount ?? 0
+      if (amount <= 0) continue
+      const investorName = fee._cap_table_entry?._shareholder?.name ?? "Investor"
+      const feeType = fee._share_class_fee?.type ?? "management"
+      const periodName = fee._period?.label ?? null
       data.operatingExpenses.push({
-        id: "period-mgmt-total",
-        label: "Management fee",
-        amount: totalMgmtFee,
-        source: "period",
-        sourceLabel: periodsInRange.length === 1 ? (periodsInRange[0].label ?? undefined) : `${periodsInRange.length} periods`,
+        id: `fee-${fee.id}`,
+        label: `${feeType.charAt(0).toUpperCase() + feeType.slice(1)} fee — ${investorName}`,
+        amount,
+        source: "fee",
+        sourceLabel: periodName ?? undefined,
+        date: fee.accrued_at,
       })
     }
 
@@ -338,7 +370,7 @@ export function FundPnlClient({
     }
 
     return data
-  }, [transactions, liabilities, manualItems, closedPeriods, selectedPeriodId, fromMs, toMs])
+  }, [transactions, liabilities, manualItems, fundFees, closedPeriods, selectedPeriodId, fromMs, toMs])
 
   // ── Computed totals ─────────────────────────────────────────────────────────
   const totalRevenue = sum(pnl.grossRevenue)

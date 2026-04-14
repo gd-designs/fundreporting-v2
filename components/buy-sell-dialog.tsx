@@ -208,6 +208,8 @@ export function BuySellDialog({
   const previewAmount = isTicker ? tickerTotal ?? 0 : parseFloat(amount) || 0;
   const selectedCashBalance = cashAssetId ? (cashBalances.get(cashAssetId) ?? 0) : 0;
   const requiresCapitalCheck = !allowNewMoneyIn;
+  // No cash account at all in a non-portfolio entity → block buy
+  const missingCashAccount = requiresCapitalCheck && mode === "buy" && needsNewCashAccount;
   const insufficientCashBalance =
     requiresCapitalCheck &&
     mode === "buy" &&
@@ -306,7 +308,9 @@ export function BuySellDialog({
 
       // 3. Entry legs
       if (mode === "buy") {
-        if (recordNewMoneyIn || needsNewCashAccount || needsSplit) {
+        // Only fund the cash leg with new_money_in when this entity is allowed to (portfolios).
+        // Funds/companies must use existing cash and never fabricate money.
+        if (allowNewMoneyIn && (recordNewMoneyIn || needsNewCashAccount || needsSplit)) {
           await fetch("/api/transaction-entries", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -607,6 +611,16 @@ export function BuySellDialog({
             </div>
           )}
 
+          {/* No cash account at all — non-portfolio */}
+          {missingCashAccount && (
+            <div className="rounded-md border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/30 p-3 text-sm">
+              <p className="font-medium text-red-800 dark:text-red-300">No cash account</p>
+              <p className="text-red-700 dark:text-red-400 text-xs mt-0.5">
+                This entity has no {selectedCurrencyCode ?? ""} cash account. Capital must arrive via a subscription or transfer before you can record a purchase.
+              </p>
+            </div>
+          )}
+
           {/* Reference */}
           <div className="grid gap-2">
             <Label htmlFor="buy-sell-ref">Reference <span className="text-muted-foreground">(optional)</span></Label>
@@ -632,7 +646,7 @@ export function BuySellDialog({
           <Button variant="outline" onClick={() => handleOpenChange(false)}>Cancel</Button>
           <Button
             onClick={() => void handleSubmit()}
-            disabled={saving || (isTicker ? !tickerTotal : !amount) || !currencyId || insufficientCashBalance}
+            disabled={saving || (isTicker ? !tickerTotal : !amount) || !currencyId || insufficientCashBalance || missingCashAccount}
             className={mode === "sell" ? "bg-rose-600 hover:bg-rose-700 text-white" : ""}
           >
             {saving ? "Recording…" : mode === "buy" ? "Record purchase" : "Record sale"}

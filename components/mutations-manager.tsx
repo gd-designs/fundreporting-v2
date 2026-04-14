@@ -1,8 +1,20 @@
 "use client"
 
 import * as React from "react"
-import { TrendingUp, TrendingDown, Trash2 } from "lucide-react"
+import { TrendingUp, TrendingDown, Trash2, Pencil } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog"
+import { Field, FieldLabel, FieldError } from "@/components/ui/field"
+import { DatePickerInput } from "@/components/date-input"
+import { Spinner } from "@/components/ui/spinner"
 import { fetchEntityMutations, type Mutation } from "@/lib/mutations"
 import { fetchEntityAssets, type EntityAsset } from "@/lib/entity-assets"
 import { formatAmountWithCurrency } from "@/lib/entity-transactions"
@@ -36,6 +48,7 @@ export function MutationsManager({ entityUUID }: { entityUUID: string }) {
   const [error, setError] = React.useState<string | null>(null)
   const [deletingId, setDeletingId] = React.useState<string | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = React.useState<string | null>(null)
+  const [editMutation, setEditMutation] = React.useState<Mutation | null>(null)
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -205,13 +218,22 @@ export function MutationsManager({ entityUUID }: { entityUUID: string }) {
                           </Button>
                         </div>
                       ) : (
-                        <button
-                          className="text-muted-foreground hover:text-destructive transition-colors"
-                          onClick={() => setConfirmDeleteId(m.id)}
-                          title="Delete mutation"
-                        >
-                          <Trash2 className="size-3.5" />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            className="text-muted-foreground hover:text-foreground transition-colors"
+                            onClick={() => setEditMutation(m)}
+                            title="Edit mutation"
+                          >
+                            <Pencil className="size-3.5" />
+                          </button>
+                          <button
+                            className="text-muted-foreground hover:text-destructive transition-colors"
+                            onClick={() => setConfirmDeleteId(m.id)}
+                            title="Delete mutation"
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -230,6 +252,118 @@ export function MutationsManager({ entityUUID }: { entityUUID: string }) {
           </table>
         )}
       </div>
+
+      <EditMutationDialog
+        mutation={editMutation}
+        assetName={editMutation ? (assetMap.get(editMutation.assetId)?.name ?? null) : null}
+        currencyCode={editMutation ? (assetMap.get(editMutation.assetId)?.currencyCode ?? null) : null}
+        onClose={() => setEditMutation(null)}
+        onSaved={() => { setEditMutation(null); void load() }}
+      />
     </div>
+  )
+}
+
+// ── Edit Mutation Dialog ────────────────────────────────────────────────────
+
+function EditMutationDialog({
+  mutation,
+  assetName,
+  currencyCode,
+  onClose,
+  onSaved,
+}: {
+  mutation: Mutation | null
+  assetName: string | null
+  currencyCode: string | null
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [delta, setDelta] = React.useState("")
+  const [date, setDate] = React.useState<Date | undefined>()
+  const [notes, setNotes] = React.useState("")
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    if (mutation) {
+      setDelta(String(mutation.delta))
+      setDate(new Date(mutation.date))
+      setNotes(mutation.notes ?? "")
+      setError(null)
+    }
+  }, [mutation])
+
+  async function handleSave() {
+    if (!mutation) return
+    setSaving(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/mutations/${mutation.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          delta: Number(delta),
+          date: date ? date.getTime() : mutation.date,
+          notes: notes.trim() || null,
+        }),
+      })
+      if (!res.ok) throw new Error("Failed to save")
+      onSaved()
+    } catch {
+      setError("Failed to save mutation.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={!!mutation} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Edit mutation</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-3 py-2">
+          {assetName && (
+            <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Asset</span>
+                <span className="font-medium">{assetName}</span>
+              </div>
+            </div>
+          )}
+          <Field>
+            <FieldLabel>Delta ({currencyCode ?? ""})</FieldLabel>
+            <Input
+              type="number"
+              step="0.01"
+              value={delta}
+              onChange={(e) => setDelta(e.target.value)}
+              placeholder="e.g. 5000 or -2000"
+            />
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              Positive = growth, negative = decline
+            </p>
+          </Field>
+          <DatePickerInput id="edit-mut-date" label="Date" value={date} onChange={setDate} />
+          <Field>
+            <FieldLabel>Notes</FieldLabel>
+            <Textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Optional"
+              rows={3}
+            />
+          </Field>
+          {error && <FieldError>{error}</FieldError>}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button disabled={saving || !delta} onClick={handleSave}>
+            {saving ? <Spinner className="size-4" /> : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
