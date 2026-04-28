@@ -2326,19 +2326,23 @@ function RedemptionStep({
         toSave.map(async (p) => {
           const nav = navForPosition(p)
           const shares = Number(redemptions[p.entryId])
-          const amount = shares * nav
+          // Prefer the user-typed amount (allows discount/premium); fall back to shares × NAV.
+          const typedAmt = redemptionAmounts[p.entryId] ? Number(redemptionAmounts[p.entryId]) : NaN
+          const amount = Number.isFinite(typedAmt) && typedAmt > 0 ? typedAmt : shares * nav
+          // Implied price/share at declaration — derived from the actual amount, not class NAV.
+          const navAtDeclaration = shares > 0 ? amount / shares : nav
           const existing = recordedIds[p.entryId]
           if (existing) {
             await Promise.all([
               fetch(`/api/fund-mutations/${existing.mutationId}`, {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ shares_redeemed: shares, amount_returned: amount }),
+                body: JSON.stringify({ shares_redeemed: shares, amount_returned: amount, nav_per_share: navAtDeclaration }),
               }),
               fetch(`/api/fund-payouts/${existing.payoutId}`, {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ shares_redeemed: shares, amount }),
+                body: JSON.stringify({ shares_redeemed: shares, amount, nav_at_declaration: navAtDeclaration }),
               }),
             ])
             newIds[p.entryId] = existing
@@ -2348,7 +2352,7 @@ function RedemptionStep({
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 entity: entityUUID, cap_table_entry: p.entryId, type: "redemption",
-                shares_redeemed: shares, amount_returned: amount, nav_per_share: nav,
+                shares_redeemed: shares, amount_returned: amount, nav_per_share: navAtDeclaration,
                 mutation_at: redeemedAt,
               }),
             })
@@ -2359,7 +2363,7 @@ function RedemptionStep({
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 entity: entityUUID, fund_mutation: mutation.id, cap_table_entry: p.entryId,
-                type: "redemption", amount, nav_at_declaration: nav, shares_redeemed: shares,
+                type: "redemption", amount, nav_at_declaration: navAtDeclaration, shares_redeemed: shares,
                 status: "pending", declared_at: redeemedAt,
               }),
             })

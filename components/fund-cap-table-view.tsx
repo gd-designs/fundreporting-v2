@@ -538,17 +538,26 @@ export function FundCapTableView({
   }, [mutations, transfers])
 
   // Live value per entry = net shares * current share class NAV.
-  // Falls back to deployed amount when no mutations exist (e.g. legacy or migration data).
+  // Falls back to deployed amount ONLY when this entry has no fund_mutation history
+  // (legacy / migration data). If mutations exist and net to 0, the position is
+  // fully closed — live value must be 0, not the deployed fallback.
   const liveValueByEntry = React.useMemo(() => {
+    const entriesWithMutations = new Set<string>()
+    for (const m of mutations) {
+      if (m.cap_table_entry) entriesWithMutations.add(m.cap_table_entry)
+    }
     const result = new Map<string, number>()
     for (const entry of entries) {
       const sc = shareClasses.find((s) => s.id === entry.share_class)
       const nav = sc?.current_nav ?? null
       const netShares = sharesByEntryMap.get(entry.id) ?? 0
-      if (nav != null && netShares > 0) {
+      if (nav != null && netShares > 0.0001) {
         result.set(entry.id, netShares * nav)
+      } else if (entriesWithMutations.has(entry.id)) {
+        // Mutations exist for this entry but net to ~0 → position closed
+        result.set(entry.id, 0)
       } else {
-        // Fallback: deployed amount on this entry
+        // No mutation history at all — fall back to deployed amount (legacy data)
         const deployedOnEntry = calls
           .filter((c) => c.cap_table_entry === entry.id && c.deployed_at != null)
           .reduce((s, c) => s + (c.amount ?? 0), 0)
@@ -556,7 +565,7 @@ export function FundCapTableView({
       }
     }
     return result
-  }, [sharesByEntryMap, entries, shareClasses, calls])
+  }, [sharesByEntryMap, entries, shareClasses, calls, mutations])
 
   const groups = buildShareholderGroups(shareholders, entries, calls, liveValueByEntry, sharesByEntryMap)
 
@@ -898,9 +907,22 @@ export function FundCapTableView({
                             ) : "—"}
                           </td>
                           <td className="py-2.5 px-3 text-right">
-                            <span className="text-xs font-normal text-muted-foreground">
-                              {entryCount} round{entryCount !== 1 ? "s" : ""}
-                            </span>
+                            {(() => {
+                              const isActive = group.totalShares > 0.0001
+                              return (
+                                <span
+                                  className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide ${
+                                    isActive ? "bg-emerald-100 text-emerald-700" : "bg-muted text-muted-foreground"
+                                  }`}
+                                  title={`${entryCount} round${entryCount !== 1 ? "s" : ""}`}
+                                >
+                                  <span
+                                    className={`inline-block size-1.5 rounded-full ${isActive ? "bg-emerald-500" : "bg-muted-foreground/50"}`}
+                                  />
+                                  {isActive ? "Active" : "Inactive"}
+                                </span>
+                              )
+                            })()}
                           </td>
                         </tr>
 
