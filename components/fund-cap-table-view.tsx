@@ -658,11 +658,14 @@ export function FundCapTableView({
     return map
   }, [entries, shareholders])
 
-  // Movements per entry: capital calls + fund_payouts + share_transfers
+  // Movements per entry: capital calls + fund_payouts + share_transfers.
+  // Each kind is a separate union member (single literal) so TS narrows cleanly.
   type Movement =
     | { kind: "call"; date: number; amount: number; call: CapitalCall }
-    | { kind: "distribution" | "redemption"; date: number; amount: number; status: "pending" | "paid"; payout: PayoutRecord }
-    | { kind: "transfer_out" | "transfer_in"; date: number; shares: number; amount: number; navPerShare: number; counterpartyName: string; status: "pending" | "executed" | "reversed"; transfer: TransferRecord }
+    | { kind: "distribution"; date: number; amount: number; status: "pending" | "paid"; payout: PayoutRecord }
+    | { kind: "redemption"; date: number; amount: number; status: "pending" | "paid"; payout: PayoutRecord }
+    | { kind: "transfer_out"; date: number; shares: number; amount: number; navPerShare: number; counterpartyName: string; status: "pending" | "executed" | "reversed"; transfer: TransferRecord }
+    | { kind: "transfer_in"; date: number; shares: number; amount: number; navPerShare: number; counterpartyName: string; status: "pending" | "executed" | "reversed"; transfer: TransferRecord }
 
   const movementsByEntry = React.useMemo(() => {
     const map = new Map<string, Movement[]>()
@@ -986,7 +989,11 @@ export function FundCapTableView({
 
                               {/* Movement rows (calls + distributions + redemptions + share transfers) */}
                               {entryExpanded && (movementsByEntry.get(eg.entry.id) ?? []).map((mv) => {
-                                const rowKey = mv.kind === "call" ? `call-${mv.call.id}` : mv.kind === "transfer_out" || mv.kind === "transfer_in" ? `${mv.kind}-${mv.transfer.id}` : `payout-${mv.payout.id}`
+                                let rowKey: string
+                                if (mv.kind === "call") rowKey = `call-${mv.call.id}`
+                                else if (mv.kind === "transfer_out") rowKey = `transfer_out-${mv.transfer.id}`
+                                else if (mv.kind === "transfer_in") rowKey = `transfer_in-${mv.transfer.id}`
+                                else rowKey = `payout-${mv.payout.id}`
 
                                 // Per-type values to drop into Paid / Deployed / Shares / Distributed / Redeemed columns.
                                 let paidCell: React.ReactNode = ""
