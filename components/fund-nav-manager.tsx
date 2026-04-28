@@ -2430,7 +2430,6 @@ function RedemptionStep({
               const redeemedShares = redemptions[p.entryId] ? Number(redemptions[p.entryId]) : 0
               const sharesAfter = p.netShares - redeemedShares
               const valueAfter = nav > 0 ? sharesAfter * nav : null
-              const redeemValue = redeemedShares > 0 ? redeemedShares * nav : null
               return (
                 <tr key={p.entryId} className="border-b last:border-0">
                   <td className="py-2.5 px-4">
@@ -2471,13 +2470,8 @@ function RedemptionStep({
                         disabled={nav <= 0}
                         value={redemptionAmounts[p.entryId] ?? ""}
                         onChange={(e) => {
-                          const raw = e.target.value
-                          setRedemptionAmounts((prev) => ({ ...prev, [p.entryId]: raw }))
-                          const amt = Number(raw)
-                          setRedemptions((prev) => ({
-                            ...prev,
-                            [p.entryId]: raw === "" || !Number.isFinite(amt) || amt <= 0 || nav <= 0 ? "" : (amt / nav).toFixed(4),
-                          }))
+                          // Editing the amount is free-form — shares stays whatever the user set.
+                          setRedemptionAmounts((prev) => ({ ...prev, [p.entryId]: e.target.value }))
                         }}
                       />
                     </div>
