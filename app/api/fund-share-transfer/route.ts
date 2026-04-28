@@ -35,7 +35,7 @@ export async function POST(req: NextRequest) {
   const expectedSecret = process.env.SHARE_TRANSFER_CRON_SECRET
   const isCron = !!expectedSecret && cronSecret === expectedSecret
 
-  let token: string | null = null
+  let token: string | null | undefined = null
   if (!isCron) {
     token = await getAuthToken()
     if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
