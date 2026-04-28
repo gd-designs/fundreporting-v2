@@ -78,13 +78,31 @@ export async function POST(req: NextRequest) {
             linked_fund?: string | null
           }
 
-          if (sh.type === "fund" && sh.linked_fund) {
+          if (sh.type === "fund") {
             // Fund investor — entity is on the investing fund
-            const fundRes = await fetch(`${base}/fund/${sh.linked_fund}`, { headers: h, cache: "no-store" })
-            if (fundRes.ok) {
-              const fund = (await fundRes.json()) as { entity?: string | null }
-              investorEntityUUID = typeof fund.entity === "string" ? fund.entity : null
+            console.log(`[payout-pay] fund investor, linked_fund=${sh.linked_fund ?? "NONE"}, shareholder=${entry.shareholder}`)
+            if (sh.linked_fund) {
+              const fundRes = await fetch(`${base}/fund/${sh.linked_fund}`, { headers: h, cache: "no-store" })
+              if (fundRes.ok) {
+                const fund = (await fundRes.json()) as { entity?: string | null }
+                investorEntityUUID = typeof fund.entity === "string" ? fund.entity : null
+              }
             }
+            // Fallback: find the equity_stake asset that references this shareholder
+            // and get its entity (the investing fund's entity)
+            if (!investorEntityUUID) {
+              console.log(`[payout-pay] fallback: searching all entities for equity_stake with cap_table_shareholder=${entry.shareholder}`)
+              // The shareholder's entity field is the DISTRIBUTING fund — we need the OTHER fund.
+              // Search for an asset with cap_table_shareholder matching this shareholder ID.
+              // That asset lives on the investing fund's entity.
+              const allAssetsRes = await fetch(`${base}/asset?cap_table_shareholder=${entry.shareholder}`, { headers: h, cache: "no-store" })
+              if (allAssetsRes.ok) {
+                const allAssets = (await allAssetsRes.json()) as Array<{ entity?: string; investable?: string }>
+                const stake = allAssets.find((a) => a.investable === "equity_stake" && a.entity)
+                if (stake?.entity) investorEntityUUID = stake.entity
+              }
+            }
+            console.log(`[payout-pay] resolved fund entity=${investorEntityUUID ?? "NONE"}`)
           } else {
             // Individual/company — find personal portfolio
             let userId = sh.user ?? null
@@ -140,6 +158,7 @@ export async function POST(req: NextRequest) {
   }
 
   // 7. Investor cash IN
+  console.log(`[payout-pay] step 7: investorEntityUUID=${investorEntityUUID ?? "NONE"}, investorShareholderId=${investorShareholderId ?? "NONE"}`)
   if (investorEntityUUID) {
     // Find or create investor's cash asset (match currency from fund's cash asset)
     let investorCashAssetId: string | null = null
@@ -170,6 +189,7 @@ export async function POST(req: NextRequest) {
       if (createRes.ok) investorCashAssetId = ((await createRes.json()) as { id: string }).id
     }
 
+    console.log(`[payout-pay] step 7: investorCashAssetId=${investorCashAssetId ?? "NONE"}, fundCashCurrency=${fundCashCurrency}`)
     if (investorCashAssetId) {
       const txRes = await fetch(`${base}/transaction`, {
         method: "POST", headers: h,

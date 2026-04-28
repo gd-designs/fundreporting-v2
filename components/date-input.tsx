@@ -109,7 +109,7 @@ export function DatePickerInput({
 
   return (
     <Field className={className}>
-      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      {label ? <FieldLabel htmlFor={id}>{label}</FieldLabel> : null}
       <InputGroup>
         <InputGroupInput
           id={id}

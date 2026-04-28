@@ -290,6 +290,7 @@ function PendingPayoutsSection({
   const [loading, setLoading] = React.useState(true)
   const [markingId, setMarkingId] = React.useState<string | null>(null)
   const [expanded, setExpanded] = React.useState(false)
+  const [deletingPayoutId, setDeletingPayoutId] = React.useState<string | null>(null)
   const [payDialogPayout, setPayDialogPayout] = React.useState<FundPayout | null>(null)
   const [payDate, setPayDate] = React.useState<Date | undefined>(new Date())
   const [paySaving, setPaySaving] = React.useState(false)
@@ -396,16 +397,47 @@ function PendingPayoutsSection({
                   {p.amount != null ? formatAmountWithCurrency(p.amount, currencyCode) : "—"}
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-6 px-2 text-xs gap-1"
-                    disabled={isMarking}
-                    onClick={() => { setPayDialogPayout(p); setPayDate(p.declared_at ? new Date(p.declared_at) : new Date()) }}
-                  >
-                    <CheckCircle2 className="size-3" />
-                    {isMarking ? "…" : "Mark paid"}
-                  </Button>
+                  <div className="flex items-center justify-end gap-1">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 px-2 text-xs gap-1"
+                      disabled={isMarking}
+                      onClick={() => { setPayDialogPayout(p); setPayDate(p.declared_at ? new Date(p.declared_at) : new Date()) }}
+                    >
+                      <CheckCircle2 className="size-3" />
+                      {isMarking ? "…" : "Mark paid"}
+                    </Button>
+                    {deletingPayoutId === p.id ? (
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="destructive" className="h-6 px-2 text-xs"
+                          disabled={deletingPayoutId === p.id && isMarking}
+                          onClick={async () => {
+                            setDeletingPayoutId(p.id)
+                            try {
+                              if (p.fund_mutation) {
+                                await fetch(`/api/fund-mutations/${p.fund_mutation}`, { method: "DELETE" }).catch(() => {})
+                              }
+                              await fetch(`/api/fund-payouts/${p.id}`, { method: "DELETE" })
+                              void load()
+                            } finally {
+                              setDeletingPayoutId(null)
+                            }
+                          }}
+                        >Delete</Button>
+                        <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setDeletingPayoutId(null)}>Cancel</Button>
+                      </div>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-1.5 text-muted-foreground hover:text-destructive"
+                        onClick={() => setDeletingPayoutId(p.id)}
+                      >
+                        <Trash2 className="size-3" />
+                      </Button>
+                    )}
+                  </div>
                 </td>
               </tr>
             )

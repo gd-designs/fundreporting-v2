@@ -49,6 +49,8 @@ export function CapTableInvestorSheet({
   const [saving, setSaving] = React.useState(false)
   const [saveError, setSaveError] = React.useState<string | null>(null)
   const [deleteError, setDeleteError] = React.useState<string | null>(null)
+  const [confirmingDelete, setConfirmingDelete] = React.useState(false)
+  const [deleting, setDeleting] = React.useState(false)
 
   React.useEffect(() => {
     if (open && shareholder) {
@@ -89,18 +91,21 @@ export function CapTableInvestorSheet({
 
   async function handleDelete() {
     if (!shareholder) return
-    if (!confirm(`Remove ${shareholder.name ?? "this investor"} from the cap table? This cannot be undone.`)) return
+    setDeleting(true)
     setDeleteError(null)
     try {
       const res = await fetch(`/api/cap-table-shareholders/${shareholder.id}`, { method: "DELETE" })
       if (!res.ok) {
-        const payload = (await res.json()) as { error?: string }
+        const payload = await res.json().catch(() => ({})) as { error?: string }
         throw new Error(payload.error ?? "Failed to remove investor")
       }
       onOpenChange(false)
       onUpdated()
     } catch (e) {
       setDeleteError(e instanceof Error ? e.message : "Failed to remove investor.")
+    } finally {
+      setDeleting(false)
+      setConfirmingDelete(false)
     }
   }
 
@@ -198,15 +203,35 @@ export function CapTableInvestorSheet({
                 <Button disabled={saving || !name.trim()} onClick={handleSave}>
                   {saving ? <><Spinner className="size-3.5 mr-1.5" />Saving…</> : "Save changes"}
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                  onClick={handleDelete}
-                >
-                  <Trash2 className="size-3.5 mr-1.5" />
-                  Remove investor
-                </Button>
+                {confirmingDelete ? (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      disabled={deleting}
+                      onClick={handleDelete}
+                    >
+                      {deleting ? "Removing…" : "Confirm remove"}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setConfirmingDelete(false)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                    onClick={() => setConfirmingDelete(true)}
+                  >
+                    <Trash2 className="size-3.5 mr-1.5" />
+                    Remove investor
+                  </Button>
+                )}
               </div>
               {deleteError && (
                 <p className="text-sm text-destructive mt-2">{deleteError}</p>

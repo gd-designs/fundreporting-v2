@@ -7,7 +7,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
   const body = await req.json()
-  const res = await fetch(`${process.env.PLATFORM_API_URL}/transaction/${id}`, {
+  const res = await fetch(`${process.env.PLATFORM_API_URL}/transaction_entry/${id}`, {
     method: "PATCH",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -21,19 +21,10 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const token = await getAuthToken()
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-  // Xano handles the cascading delete: looks up all transaction_entry records
-  // for this transaction, deletes them, then deletes the transaction itself.
-  const res = await fetch(`${process.env.PLATFORM_API_URL}/transaction/${id}`, {
+  const res = await fetch(`${process.env.PLATFORM_API_URL}/transaction_entry/${id}`, {
     method: "DELETE",
     headers: { Authorization: `Bearer ${token}` },
   })
-
-  if (!res.ok) {
-    return NextResponse.json(
-      { error: "Failed to delete transaction", detail: await res.text() },
-      { status: res.status }
-    )
-  }
-
+  if (!res.ok) return NextResponse.json({ error: await res.text() }, { status: res.status })
   return new NextResponse(null, { status: 204 })
 }

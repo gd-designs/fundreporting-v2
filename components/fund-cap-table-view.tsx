@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { useSearchParams } from "next/navigation"
-import { ChevronDown, ChevronRight, MoreHorizontal, Lock, Pencil, Plus, Trash2, UserPlus, RefreshCw } from "lucide-react"
+import { ChevronDown, ChevronRight, MoreHorizontal, Lock, Pencil, Plus, Trash2, UserPlus, RefreshCw, ArrowRightLeft } from "lucide-react"
 import {
   fetchCapitalCalls,
   fetchCapTableEntries,
@@ -19,6 +19,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { CapitalCallReceive } from "@/components/capital-call-receive"
 import { AddFundInvestorDialog } from "@/components/add-fund-investor-dialog"
 import { ReinvestDialog } from "@/components/reinvest-dialog"
+import { ShareTransferDeclareDialog, type RecipientOption } from "@/components/share-transfer-declare-dialog"
 import { AddShareClassDialog } from "@/components/add-share-class-dialog"
 import { EditShareClassDialog } from "@/components/edit-share-class-dialog"
 import { CapTableInvestorSheet } from "@/components/cap-table-investor-sheet"
@@ -387,13 +388,59 @@ export function FundCapTableView({
   const [entries, setEntries] = React.useState<CapTableEntry[]>([])
   const [shareholders, setShareholders] = React.useState<CapTableShareholder[]>([])
   const [shareClasses, setShareClasses] = React.useState<ShareClass[]>([])
-  const [mutations, setMutations] = React.useState<Array<{ cap_table_entry?: string | null; type?: string | null; shares_issued?: number | null; shares_redeemed?: number | null; nav_per_share?: number | null }>>([])
+  const [mutations, setMutations] = React.useState<Array<{ id?: string | null; cap_table_entry?: string | null; type?: string | null; shares_issued?: number | null; shares_redeemed?: number | null; nav_per_share?: number | null; notes?: string | null; mutation_at?: number | null }>>([])
+  type PayoutRecord = {
+    id: string
+    cap_table_entry?: string | null
+    type?: "distribution" | "redemption" | null
+    amount?: number | null
+    status?: "pending" | "paid" | null
+    declared_at?: number | null
+    paid_at?: number | null
+    shares_redeemed?: number | null
+  }
+  type TransferRecord = {
+    id: string
+    seller_cap_table_entry?: string | null
+    buyer_cap_table_entry?: string | null
+    seller_mutation?: string | null
+    buyer_mutation?: string | null
+    shares?: number | null
+    amount?: number | null
+    nav_per_share?: number | null
+    transferred_at?: number | null
+    status?: "pending" | "executed" | "reversed" | null
+  }
+  const [payouts, setPayouts] = React.useState<PayoutRecord[]>([])
+  const [transfers, setTransfers] = React.useState<TransferRecord[]>([])
   const [loading, setLoading] = React.useState(true)
   // Keys: "sh:{id}" for shareholder rows, "entry:{id}" for entry rows
   const [expandedRows, setExpandedRows] = React.useState<Set<string>>(new Set())
   const [editDialog, setEditDialog] = React.useState<{ open: boolean; call: CapitalCall | null; entryShareClass: string | null }>({ open: false, call: null, entryShareClass: null })
   const [editEntryDialog, setEditEntryDialog] = React.useState<{ open: boolean; entry: CapTableEntry | null }>({ open: false, entry: null })
   const [reinvestDialog, setReinvestDialog] = React.useState<{ open: boolean; shareholder: CapTableShareholder | null; entry: CapTableEntry | null }>({ open: false, shareholder: null, entry: null })
+  const [transferDialog, setTransferDialog] = React.useState<{ open: boolean; shareholder: CapTableShareholder | null; entry: CapTableEntry | null; netShares: number }>({ open: false, shareholder: null, entry: null, netShares: 0 })
+  const [executingTransferId, setExecutingTransferId] = React.useState<string | null>(null)
+
+  async function executeTransfer(id: string) {
+    if (!confirm("Execute this transfer now? This will create the fund mutations and ledger entries on both sides.")) return
+    setExecutingTransferId(id)
+    try {
+      const res = await fetch("/api/fund-share-transfer", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shareTransferId: id }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as { error?: string }
+        alert(err.error ?? "Failed to execute transfer")
+        return
+      }
+      void load()
+    } finally {
+      setExecutingTransferId(null)
+    }
+  }
   const [addInvestorOpen, setAddInvestorOpen] = React.useState(false)
   const [addShareClassOpen, setAddShareClassOpen] = React.useState(false)
   const [editShareClass, setEditShareClass] = React.useState<ShareClass | null>(null)
@@ -402,18 +449,25 @@ export function FundCapTableView({
   async function load() {
     setLoading(true)
     try {
-      const [c, en, sh, sc, muts] = await Promise.all([
+      const [c, en, sh, sc, muts, po, tr] = await Promise.all([
         fetchCapitalCalls(entityUUID),
         fetchCapTableEntries(entityUUID),
         fetchCapTableShareholders(entityUUID),
         fetchShareClasses(entityUUID),
         fetch(`/api/fund-mutations?entity=${entityUUID}`).then((r) => r.ok ? r.json() : []).catch(() => []),
+        fetch(`/api/fund-payouts?entity=${entityUUID}`).then((r) => r.ok ? r.json() : []).catch(() => []),
+        Promise.all([
+          fetch(`/api/share-transfers?entity=${entityUUID}&status=pending`).then((r) => r.ok ? r.json() : []).catch(() => []),
+          fetch(`/api/share-transfers?entity=${entityUUID}&status=executed`).then((r) => r.ok ? r.json() : []),
+        ]).then(([p, e]) => [...(Array.isArray(p) ? p : []), ...(Array.isArray(e) ? e : [])]),
       ])
       setCalls(c)
       setEntries(en)
       setShareholders(sh)
       setShareClasses(sc)
       setMutations(Array.isArray(muts) ? muts : [])
+      setPayouts(Array.isArray(po) ? po : [])
+      setTransfers(Array.isArray(tr) ? tr : [])
     } finally {
       setLoading(false)
     }
@@ -438,23 +492,50 @@ export function FundCapTableView({
     })
   }
 
+  const [deletingCallId, setDeletingCallId] = React.useState<string | null>(null)
+
   async function deleteCall(id: string) {
-    if (!confirm("Delete this capital call?")) return
-    await fetch(`/api/capital-calls/${id}`, { method: "DELETE" })
-    void load()
+    setDeletingCallId(id)
+    try {
+      const res = await fetch(`/api/capital-calls/${id}`, { method: "DELETE" })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as { error?: string }
+        alert(err.error ?? "Failed to delete capital call")
+        return
+      }
+      void load()
+    } finally {
+      setDeletingCallId(null)
+    }
   }
 
-  // Net shares per entry from fund_mutation records
+  // Net shares per entry from fund_mutation records.
+  // Also adds executed share_transfer deltas when their paired fund_mutation is
+  // missing (e.g. legacy transfers recorded before the current endpoint, or
+  // where one side's mutation creation failed silently).
   const sharesByEntryMap = React.useMemo(() => {
     const result = new Map<string, number>()
+    const mutationIds = new Set<string>()
     for (const m of mutations) {
+      if (m.id) mutationIds.add(m.id)
       const entryId = m.cap_table_entry
       if (!entryId) continue
       const delta = (m.shares_issued ?? 0) - (m.shares_redeemed ?? 0)
       result.set(entryId, (result.get(entryId) ?? 0) + delta)
     }
+    for (const t of transfers) {
+      if (t.status !== "executed") continue
+      const shares = t.shares ?? 0
+      if (shares <= 0) continue
+      if (t.seller_cap_table_entry && (!t.seller_mutation || !mutationIds.has(t.seller_mutation))) {
+        result.set(t.seller_cap_table_entry, (result.get(t.seller_cap_table_entry) ?? 0) - shares)
+      }
+      if (t.buyer_cap_table_entry && (!t.buyer_mutation || !mutationIds.has(t.buyer_mutation))) {
+        result.set(t.buyer_cap_table_entry, (result.get(t.buyer_cap_table_entry) ?? 0) + shares)
+      }
+    }
     return result
-  }, [mutations])
+  }, [mutations, transfers])
 
   // Live value per entry = net shares * current share class NAV.
   // Falls back to deployed amount when no mutations exist (e.g. legacy or migration data).
@@ -479,24 +560,172 @@ export function FundCapTableView({
 
   const groups = buildShareholderGroups(shareholders, entries, calls, liveValueByEntry, sharesByEntryMap)
 
-  const totalCommitted = groups.reduce((s, g) => s + g.totalCommitted, 0)
-  const totalCalled = calls.reduce((s, c) => s + (c.amount ?? 0), 0)
-  const totalDeployed = calls.filter((c) => c.deployed_at != null).reduce((s, c) => s + (c.amount ?? 0), 0)
-
-  // Total live value = total shares across all entries × their share class current_nav
-  const totalLiveValue = React.useMemo(() => {
-    let total = 0
-    for (const entry of entries) {
-      const sc = shareClasses.find((s) => s.id === entry.share_class)
-      const nav = sc?.current_nav ?? null
-      const netShares = sharesByEntryMap.get(entry.id) ?? 0
-      if (nav != null && netShares > 0) {
-        total += netShares * nav
+  // Deployed = deployed capital_call.amount + executed share_transfer net flow.
+  // Buyer inherits already-deployed capital (auto-deployed); seller loses deployed.
+  const deployedByEntry = React.useMemo(() => {
+    const map = new Map<string, number>()
+    for (const cc of calls) {
+      if (!cc.cap_table_entry || cc.deployed_at == null) continue
+      map.set(cc.cap_table_entry, (map.get(cc.cap_table_entry) ?? 0) + (cc.amount ?? 0))
+    }
+    for (const t of transfers) {
+      if (t.status !== "executed") continue
+      const amt = t.amount ?? 0
+      if (t.buyer_cap_table_entry) {
+        map.set(t.buyer_cap_table_entry, (map.get(t.buyer_cap_table_entry) ?? 0) + amt)
+      }
+      if (t.seller_cap_table_entry) {
+        map.set(t.seller_cap_table_entry, (map.get(t.seller_cap_table_entry) ?? 0) - amt)
       }
     }
-    return total
-  }, [sharesByEntryMap, entries, shareClasses])
+    return map
+  }, [calls, transfers])
 
+  // Per-entry historical NAV — taken from the first non-transfer subscription mutation.
+  // Used to display capital-call shares at the price they were actually issued at,
+  // not at the current (possibly inflated) NAV.
+  const originalNavByEntry = React.useMemo(() => {
+    const map = new Map<string, number>()
+    // Transfer-in mutations are priced at the transfer's NAV, not the original
+    // subscription's, so exclude them by checking notes prefix.
+    const subs = mutations
+      .filter((m) =>
+        m.cap_table_entry &&
+        m.type === "subscription" &&
+        (m.nav_per_share ?? 0) > 0 &&
+        !(typeof m.notes === "string" && /^transfer (to|from)/i.test(m.notes)),
+      )
+      .sort((a, b) => (a.mutation_at ?? 0) - (b.mutation_at ?? 0))
+    for (const m of subs) {
+      const entryId = m.cap_table_entry!
+      if (map.has(entryId)) continue
+      map.set(entryId, m.nav_per_share!)
+    }
+    return map
+  }, [mutations])
+
+  // Paid = sum of paid/deployed capital_call.amount + executed share_transfer amounts
+  // (buyer side adds, seller side subtracts) per entry
+  const paidByEntry = React.useMemo(() => {
+    const map = new Map<string, number>()
+    for (const cc of calls) {
+      if (!cc.cap_table_entry) continue
+      const isPaid = cc.status === "paid" || cc.deployed_at != null
+      if (!isPaid) continue
+      map.set(cc.cap_table_entry, (map.get(cc.cap_table_entry) ?? 0) + (cc.amount ?? 0))
+    }
+    for (const t of transfers) {
+      if (t.status !== "executed") continue
+      const amt = t.amount ?? 0
+      if (t.buyer_cap_table_entry) {
+        map.set(t.buyer_cap_table_entry, (map.get(t.buyer_cap_table_entry) ?? 0) + amt)
+      }
+      if (t.seller_cap_table_entry) {
+        map.set(t.seller_cap_table_entry, (map.get(t.seller_cap_table_entry) ?? 0) - amt)
+      }
+    }
+    return map
+  }, [calls, transfers])
+
+  // Distributed / Redeemed = sum of fund_payout.amount per entry, by type.
+  // Includes pending + paid because the underlying fund_mutation already reduced
+  // shares at declaration time — keeping these in sync with the share count.
+  const distributedByEntry = React.useMemo(() => {
+    const map = new Map<string, number>()
+    for (const p of payouts) {
+      if (!p.cap_table_entry || p.type !== "distribution") continue
+      map.set(p.cap_table_entry, (map.get(p.cap_table_entry) ?? 0) + (p.amount ?? 0))
+    }
+    return map
+  }, [payouts])
+
+  const redeemedByEntry = React.useMemo(() => {
+    const map = new Map<string, number>()
+    for (const p of payouts) {
+      if (!p.cap_table_entry || p.type !== "redemption") continue
+      map.set(p.cap_table_entry, (map.get(p.cap_table_entry) ?? 0) + (p.amount ?? 0))
+    }
+    return map
+  }, [payouts])
+
+  // Lookup: cap_table_entry id → shareholder name (for transfer counter-party display)
+  const nameByEntryId = React.useMemo(() => {
+    const map = new Map<string, string>()
+    for (const e of entries) {
+      const sh = shareholders.find((s) => s.id === e.shareholder)
+      if (sh?.name) map.set(e.id, sh.name)
+    }
+    return map
+  }, [entries, shareholders])
+
+  // Movements per entry: capital calls + fund_payouts + share_transfers
+  type Movement =
+    | { kind: "call"; date: number; amount: number; call: CapitalCall }
+    | { kind: "distribution" | "redemption"; date: number; amount: number; status: "pending" | "paid"; payout: PayoutRecord }
+    | { kind: "transfer_out" | "transfer_in"; date: number; shares: number; amount: number; navPerShare: number; counterpartyName: string; status: "pending" | "executed" | "reversed"; transfer: TransferRecord }
+
+  const movementsByEntry = React.useMemo(() => {
+    const map = new Map<string, Movement[]>()
+    const push = (entryId: string, m: Movement) => {
+      if (!map.has(entryId)) map.set(entryId, [])
+      map.get(entryId)!.push(m)
+    }
+    for (const cc of calls) {
+      if (!cc.cap_table_entry) continue
+      push(cc.cap_table_entry, {
+        kind: "call",
+        date: cc.called_at ?? cc.due_date ?? 0,
+        amount: cc.amount ?? 0,
+        call: cc,
+      })
+    }
+    for (const p of payouts) {
+      if (!p.cap_table_entry || !p.type) continue
+      push(p.cap_table_entry, {
+        kind: p.type,
+        date: p.paid_at ?? p.declared_at ?? 0,
+        amount: p.amount ?? 0,
+        status: (p.status ?? "pending") as "pending" | "paid",
+        payout: p,
+      })
+    }
+    for (const t of transfers) {
+      if (t.seller_cap_table_entry) {
+        push(t.seller_cap_table_entry, {
+          kind: "transfer_out",
+          date: t.transferred_at ?? 0,
+          shares: t.shares ?? 0,
+          amount: t.amount ?? 0,
+          navPerShare: t.nav_per_share ?? 0,
+          counterpartyName: t.buyer_cap_table_entry ? nameByEntryId.get(t.buyer_cap_table_entry) ?? "—" : "—",
+          status: (t.status ?? "pending") as "pending" | "executed" | "reversed",
+          transfer: t,
+        })
+      }
+      if (t.buyer_cap_table_entry) {
+        push(t.buyer_cap_table_entry, {
+          kind: "transfer_in",
+          date: t.transferred_at ?? 0,
+          shares: t.shares ?? 0,
+          amount: t.amount ?? 0,
+          navPerShare: t.nav_per_share ?? 0,
+          counterpartyName: t.seller_cap_table_entry ? nameByEntryId.get(t.seller_cap_table_entry) ?? "—" : "—",
+          status: (t.status ?? "pending") as "pending" | "executed" | "reversed",
+          transfer: t,
+        })
+      }
+    }
+    for (const list of map.values()) list.sort((a, b) => a.date - b.date)
+    return map
+  }, [calls, payouts, transfers, nameByEntryId])
+
+  const totalPaid = Array.from(paidByEntry.values()).reduce((s, v) => s + v, 0)
+  const totalDistributed = Array.from(distributedByEntry.values()).reduce((s, v) => s + v, 0)
+  const totalRedeemed = Array.from(redeemedByEntry.values()).reduce((s, v) => s + v, 0)
+  const totalDeployed = Array.from(deployedByEntry.values()).reduce((s, v) => s + v, 0)
+
+  // Total live value = sum of all per-entry live values (includes deployed fallback)
+  const totalLiveValue = groups.reduce((s, g) => s + g.totalLiveValue, 0)
   const totalShares = groups.reduce((s, g) => s + g.totalShares, 0)
 
   if (loading) {
@@ -518,10 +747,10 @@ export function FundCapTableView({
           {(() => {
             // Current NAV: weighted average across share classes (weighted by shares in each class)
             const currentNav = totalShares > 0 ? totalLiveValue / totalShares : (shareClasses[0]?.current_nav ?? null)
-            const gl = totalDeployed > 0 ? totalLiveValue - totalDeployed : null
+            const gl = totalDeployed > 0 ? totalLiveValue + totalDistributed + totalRedeemed - totalDeployed : null
             return [
               { label: "Investors", value: String(groups.length) },
-              { label: "Paid", value: fmtCurrency(totalCalled, currencyCode) },
+              { label: "Paid", value: fmtCurrency(totalPaid, currencyCode) },
               { label: "Deployed", value: fmtCurrency(totalDeployed, currencyCode) },
               { label: "Shares", value: totalShares > 0 ? fmt(totalShares) : "—" },
               { label: "Current NAV", value: currentNav != null ? fmtCurrency(currentNav, currencyCode) : "—" },
@@ -601,11 +830,11 @@ export function FundCapTableView({
                   <tr className="border-b text-xs text-muted-foreground">
                     <th className="w-6 py-2 px-3"></th>
                     <th className="text-left py-2 px-3 font-medium">Investor</th>
-                    <th className="text-right py-2 px-3 font-medium">Committed</th>
-                    <th className="text-right py-2 px-3 font-medium">Called</th>
-                    <th className="text-right py-2 px-3 font-medium">Uncalled</th>
+                    <th className="text-right py-2 px-3 font-medium">Paid</th>
                     <th className="text-right py-2 px-3 font-medium">Deployed</th>
                     <th className="text-right py-2 px-3 font-medium">Shares</th>
+                    <th className="text-right py-2 px-3 font-medium">Distributed</th>
+                    <th className="text-right py-2 px-3 font-medium">Redeemed</th>
                     <th className="text-right py-2 px-3 font-medium">Live value</th>
                     <th className="py-2 px-3"></th>
                   </tr>
@@ -616,7 +845,10 @@ export function FundCapTableView({
                   {groups.map((group) => {
                     const shKey = `sh:${group.shareholder.id}`
                     const shExpanded = expandedRows.has(shKey)
-                    const uncalled = group.totalCommitted - group.totalCalled
+                    const groupPaid = group.entries.reduce((s, eg) => s + (paidByEntry.get(eg.entry.id) ?? 0), 0)
+                    const groupDeployed = group.entries.reduce((s, eg) => s + (deployedByEntry.get(eg.entry.id) ?? 0), 0)
+                    const groupDistributed = group.entries.reduce((s, eg) => s + (distributedByEntry.get(eg.entry.id) ?? 0), 0)
+                    const groupRedeemed = group.entries.reduce((s, eg) => s + (redeemedByEntry.get(eg.entry.id) ?? 0), 0)
                     const entryCount = group.entries.length
 
                     return (
@@ -640,18 +872,18 @@ export function FundCapTableView({
                               )}
                             </button>
                           </td>
-                          <td className="py-2.5 px-3 text-right tabular-nums">{fmtCurrency(group.totalCommitted, currencyCode)}</td>
-                          <td className="py-2.5 px-3 text-right tabular-nums">{group.totalCalled > 0 ? fmtCurrency(group.totalCalled, currencyCode) : "—"}</td>
-                          <td className="py-2.5 px-3 text-right tabular-nums">{uncalled > 0 ? fmtCurrency(uncalled, currencyCode) : "—"}</td>
-                          <td className="py-2.5 px-3 text-right tabular-nums">{group.totalDeployed > 0 ? fmtCurrency(group.totalDeployed, currencyCode) : "—"}</td>
+                          <td className="py-2.5 px-3 text-right tabular-nums">{groupPaid > 0 ? fmtCurrency(groupPaid, currencyCode) : "—"}</td>
+                          <td className="py-2.5 px-3 text-right tabular-nums">{groupDeployed > 0 ? fmtCurrency(groupDeployed, currencyCode) : "—"}</td>
                           <td className="py-2.5 px-3 text-right tabular-nums">{group.totalShares > 0 ? fmt(group.totalShares) : "—"}</td>
+                          <td className="py-2.5 px-3 text-right tabular-nums text-amber-600">{groupDistributed > 0 ? `−${fmtCurrency(groupDistributed, currencyCode)}` : "—"}</td>
+                          <td className="py-2.5 px-3 text-right tabular-nums text-red-600">{groupRedeemed > 0 ? `−${fmtCurrency(groupRedeemed, currencyCode)}` : "—"}</td>
                           <td className="py-2.5 px-3 text-right tabular-nums">
                             {group.totalLiveValue > 0 ? (
                               <div>
                                 <div>{fmtCurrency(group.totalLiveValue, currencyCode)}</div>
-                                {group.totalDeployed > 0 && (() => {
-                                  const gl = group.totalLiveValue - group.totalDeployed
-                                  const pct = (gl / group.totalDeployed) * 100
+                                {groupDeployed > 0 && (() => {
+                                  const gl = group.totalLiveValue + groupDistributed + groupRedeemed - groupDeployed
+                                  const pct = (gl / groupDeployed) * 100
                                   const color = gl >= 0 ? "text-emerald-600" : "text-red-600"
                                   return (
                                     <div className={`text-[11px] ${color}`}>
@@ -674,11 +906,11 @@ export function FundCapTableView({
                           const entryKey = `entry:${eg.entry.id}`
                           const entryExpanded = expandedRows.has(entryKey)
                           const sc = shareClasses.find((s) => s.id === eg.entry.share_class)
-                          const entryCalled = eg.calls.reduce((s, c) => s + (c.amount ?? 0), 0)
-                          const entryDeployed = eg.calls.filter((c) => c.deployed_at != null).reduce((s, c) => s + (c.amount ?? 0), 0)
+                          const entryDeployed = deployedByEntry.get(eg.entry.id) ?? 0
                           const entryLiveValue = eg.liveValue
-                          const entryCommitted = Math.max(eg.entry.committed_amount ?? 0, entryCalled)
-                          const entryUncalled = entryCommitted - entryCalled
+                          const entryPaid = paidByEntry.get(eg.entry.id) ?? 0
+                          const entryDistributed = distributedByEntry.get(eg.entry.id) ?? 0
+                          const entryRedeemed = redeemedByEntry.get(eg.entry.id) ?? 0
 
                           return (
                             <React.Fragment key={eg.entry.id}>
@@ -699,17 +931,17 @@ export function FundCapTableView({
                                     )}
                                   </div>
                                 </td>
-                                <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{fmtCurrency(entryCommitted, currencyCode)}</td>
-                                <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{entryCalled > 0 ? fmtCurrency(entryCalled, currencyCode) : "—"}</td>
-                                <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{entryUncalled > 0 ? fmtCurrency(entryUncalled, currencyCode) : "—"}</td>
+                                <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{entryPaid > 0 ? fmtCurrency(entryPaid, currencyCode) : "—"}</td>
                                 <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{entryDeployed > 0 ? fmtCurrency(entryDeployed, currencyCode) : "—"}</td>
                                 <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{eg.netShares > 0 ? fmt(eg.netShares) : "—"}</td>
+                                <td className="py-2 px-3 text-right tabular-nums text-amber-600/80">{entryDistributed > 0 ? `−${fmtCurrency(entryDistributed, currencyCode)}` : "—"}</td>
+                                <td className="py-2 px-3 text-right tabular-nums text-red-600/80">{entryRedeemed > 0 ? `−${fmtCurrency(entryRedeemed, currencyCode)}` : "—"}</td>
                                 <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">
                                   {entryLiveValue > 0 ? (
                                     <div>
                                       <div>{fmtCurrency(entryLiveValue, currencyCode)}</div>
                                       {entryDeployed > 0 && (() => {
-                                        const gl = entryLiveValue - entryDeployed
+                                        const gl = entryLiveValue + entryDistributed + entryRedeemed - entryDeployed
                                         const pct = (gl / entryDeployed) * 100
                                         const color = gl >= 0 ? "text-emerald-600" : "text-red-600"
                                         return (
@@ -732,13 +964,19 @@ export function FundCapTableView({
                                           <MoreHorizontal className="size-3.5" />
                                         </Button>
                                       </DropdownMenuTrigger>
-                                      <DropdownMenuContent align="end">
+                                      <DropdownMenuContent align="end" className="min-w-44">
                                         <DropdownMenuItem onClick={() => setEditEntryDialog({ open: true, entry: eg.entry })}>
-                                          <Pencil className="size-3.5 mr-2" /> Edit entry
+                                          <Pencil className="size-3.5 mr-2" /> <span className="whitespace-nowrap">Edit entry</span>
                                         </DropdownMenuItem>
                                         <DropdownMenuSeparator />
                                         <DropdownMenuItem onClick={() => setReinvestDialog({ open: true, shareholder: group.shareholder, entry: eg.entry })}>
-                                          <RefreshCw className="size-3.5 mr-2" /> Reinvest
+                                          <RefreshCw className="size-3.5 mr-2" /> <span className="whitespace-nowrap">Reinvest</span>
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem
+                                          disabled={eg.netShares <= 0}
+                                          onClick={() => setTransferDialog({ open: true, shareholder: group.shareholder, entry: eg.entry, netShares: eg.netShares })}
+                                        >
+                                          <ArrowRightLeft className="size-3.5 mr-2" /> <span className="whitespace-nowrap">Transfer shares</span>
                                         </DropdownMenuItem>
                                       </DropdownMenuContent>
                                     </DropdownMenu>
@@ -746,83 +984,157 @@ export function FundCapTableView({
                                 </td>
                               </tr>
 
-                              {/* Capital call rows (visible when entry expanded) */}
-                              {entryExpanded && eg.calls.map((cc) => {
-                                const callSc = shareClasses.find((s) => s.id === (cc.share_class ?? eg.entry.share_class))
-                                const sharesForCall = callSc?.current_nav && cc.amount ? cc.amount / callSc.current_nav : null
-                                const now = Date.now()
-                                const isOverdue = cc.due_date != null && cc.due_date < now && cc.status !== "paid"
-                                const isDeployed = cc.deployed_at != null
-                                const isLocked = cc.status !== "pending"
-                                const statusLabel = isDeployed ? "Deployed" : cc.status === "paid" ? "Paid" : cc.status === "partial" ? "Partial" : "Pending"
-                                const statusClass = isDeployed ? "bg-emerald-100 text-emerald-800" : STATUS_BADGE[cc.status ?? "pending"]
+                              {/* Movement rows (calls + distributions + redemptions + share transfers) */}
+                              {entryExpanded && (movementsByEntry.get(eg.entry.id) ?? []).map((mv) => {
+                                const rowKey = mv.kind === "call" ? `call-${mv.call.id}` : mv.kind === "transfer_out" || mv.kind === "transfer_in" ? `${mv.kind}-${mv.transfer.id}` : `payout-${mv.payout.id}`
+
+                                // Per-type values to drop into Paid / Deployed / Shares / Distributed / Redeemed columns.
+                                let paidCell: React.ReactNode = ""
+                                let deployedCell: React.ReactNode = ""
+                                let sharesCell: React.ReactNode = ""
+                                let distCell: React.ReactNode = ""
+                                let redCell: React.ReactNode = ""
+                                let labelBadge: React.ReactNode = null
+                                let labelDate: React.ReactNode = null
+                                let labelSubtext: React.ReactNode = null
+                                let statusBadge: React.ReactNode = null
+                                let actionsCell: React.ReactNode = null
+
+                                if (mv.kind === "call") {
+                                  const cc = mv.call
+                                  const callSc = shareClasses.find((s) => s.id === (cc.share_class ?? eg.entry.share_class))
+                                  // Prefer the historical NAV from the entry's original subscription mutation;
+                                  // fall back to current class NAV (less accurate but better than nothing).
+                                  const navForShares = originalNavByEntry.get(eg.entry.id) ?? callSc?.current_nav ?? null
+                                  const sharesForCall = navForShares && cc.amount ? cc.amount / navForShares : null
+                                  const isDeployed = cc.deployed_at != null
+                                  const isPaid = cc.status === "paid" || isDeployed
+                                  const canDelete = !isDeployed
+                                  const statusLabel = isDeployed ? "Deployed" : cc.status === "paid" ? "Paid" : cc.status === "partial" ? "Partial" : "Pending"
+                                  const statusClass = isDeployed ? "bg-emerald-100 text-emerald-800" : STATUS_BADGE[cc.status ?? "pending"]
+                                  labelBadge = <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide bg-blue-100 text-blue-700">Capital call</span>
+                                  labelDate = cc.called_at ? fmtDate(cc.called_at) : "Pending issue"
+                                  labelSubtext = callSc ? (
+                                    <>{callSc.name}{callSc.current_nav != null && ` · ${fmtCurrency(callSc.current_nav, currencyCode)}/share`}</>
+                                  ) : null
+                                  paidCell = isPaid ? <span className="text-emerald-700">+{fmtCurrency(cc.amount, currencyCode)}</span> : <span className="text-muted-foreground">{fmtCurrency(cc.amount, currencyCode)}</span>
+                                  deployedCell = isDeployed
+                                    ? <span className="text-emerald-700">+{fmtCurrency(cc.amount, currencyCode)}</span>
+                                    : (cc.status === "paid"
+                                      ? <CapitalCallReceive capitalCall={cc} entityUUID={entityUUID} currencyCode={currencyCode} label="Deploy" onSuccess={load} />
+                                      : "")
+                                  sharesCell = sharesForCall != null ? <span className="text-muted-foreground">{fmt(sharesForCall)}</span> : ""
+                                  statusBadge = <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 font-medium ${statusClass}`}>{statusLabel}</span>
+                                  actionsCell = isDeployed ? (
+                                    <Lock className="size-3 text-muted-foreground/40" />
+                                  ) : (
+                                    <DropdownMenu>
+                                      <DropdownMenuTrigger asChild>
+                                        <Button variant="ghost" size="icon" className="size-6">
+                                          <MoreHorizontal className="size-3.5" />
+                                        </Button>
+                                      </DropdownMenuTrigger>
+                                      <DropdownMenuContent align="end">
+                                        <DropdownMenuItem onClick={() => setEditDialog({ open: true, call: cc, entryShareClass: eg.entry.share_class })}>
+                                          <Pencil className="size-3.5 mr-2" /> Edit
+                                        </DropdownMenuItem>
+                                        {canDelete && (
+                                          <>
+                                            <DropdownMenuSeparator />
+                                            <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => deleteCall(cc.id)}>
+                                              <Trash2 className="size-3.5 mr-2" /> Delete
+                                            </DropdownMenuItem>
+                                          </>
+                                        )}
+                                      </DropdownMenuContent>
+                                    </DropdownMenu>
+                                  )
+                                } else if (mv.kind === "distribution" || mv.kind === "redemption") {
+                                  const isDist = mv.kind === "distribution"
+                                  const label = isDist ? "Distribution" : "Redemption"
+                                  const badgeClass = isDist ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700"
+                                  const statusClass = mv.status === "paid" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+                                  const statusLabel = mv.status === "paid" ? "Paid" : "Pending"
+                                  labelBadge = <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${badgeClass}`}>{label}</span>
+                                  labelDate = mv.date ? fmtDate(mv.date) : "—"
+                                  if (!isDist && mv.payout.shares_redeemed != null) {
+                                    labelSubtext = <>{fmt(mv.payout.shares_redeemed)} shares redeemed</>
+                                  }
+                                  if (isDist) {
+                                    distCell = <span className="text-amber-600">−{fmtCurrency(mv.amount, currencyCode)}</span>
+                                  } else {
+                                    redCell = <span className="text-red-600">−{fmtCurrency(mv.amount, currencyCode)}</span>
+                                    if (mv.payout.shares_redeemed != null) {
+                                      sharesCell = <span className="text-muted-foreground">−{fmt(mv.payout.shares_redeemed)}</span>
+                                    }
+                                  }
+                                  statusBadge = <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 font-medium ${statusClass}`}>{statusLabel}</span>
+                                } else {
+                                  // transfer_out / transfer_in
+                                  const isOut = mv.kind === "transfer_out"
+                                  const label = isOut ? "Transfer out" : "Transfer in"
+                                  const badgeClass = isOut ? "bg-slate-100 text-slate-700" : "bg-indigo-100 text-indigo-700"
+                                  const statusClass = mv.status === "executed" ? "bg-emerald-100 text-emerald-800" : mv.status === "pending" ? "bg-amber-100 text-amber-800" : "bg-muted text-muted-foreground"
+                                  const statusLabel = mv.status === "executed" ? "Executed" : mv.status === "pending" ? "Pending" : "Reversed"
+                                  labelBadge = <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${badgeClass}`}>{label}</span>
+                                  labelDate = mv.date ? fmtDate(mv.date) : "—"
+                                  labelSubtext = (
+                                    <>{isOut ? "→" : "←"} {mv.counterpartyName}{mv.navPerShare > 0 && ` · ${fmtCurrency(mv.navPerShare, currencyCode)}/share`}</>
+                                  )
+                                  if (isOut) {
+                                    // Seller's stake (and the underlying deployed capital) leaves the position.
+                                    redCell = <span className="text-red-600">−{fmtCurrency(mv.amount, currencyCode)}</span>
+                                    if (mv.shares > 0) sharesCell = <span className="text-muted-foreground">−{fmt(mv.shares)}</span>
+                                    if (mv.status === "executed") {
+                                      deployedCell = <span className="text-red-600">−{fmtCurrency(mv.amount, currencyCode)}</span>
+                                    }
+                                  } else {
+                                    // Buyer inherits already-deployed capital — no fund cash movement, so it's auto-deployed.
+                                    paidCell = <span className="text-emerald-700">+{fmtCurrency(mv.amount, currencyCode)}</span>
+                                    if (mv.shares > 0) sharesCell = <span className="text-muted-foreground">+{fmt(mv.shares)}</span>
+                                    if (mv.status === "executed") {
+                                      deployedCell = <span className="text-emerald-700">+{fmtCurrency(mv.amount, currencyCode)}</span>
+                                    }
+                                  }
+                                  statusBadge = <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 font-medium ${statusClass}`}>{statusLabel}</span>
+                                  // Show "Execute now" only on the seller-side row to avoid duplicate buttons
+                                  if (mv.status === "pending" && isOut) {
+                                    const isExecuting = executingTransferId === mv.transfer.id
+                                    actionsCell = (
+                                      <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" disabled={isExecuting} onClick={() => executeTransfer(mv.transfer.id)}>
+                                        {isExecuting ? "…" : "Execute now"}
+                                      </Button>
+                                    )
+                                  }
+                                }
 
                                 return (
-                                  <tr key={cc.id} className="bg-muted/20 border-b text-xs">
+                                  <tr key={rowKey} className="bg-muted/20 border-b text-xs">
                                     <td colSpan={2} className="py-2 px-3 pl-14">
-                                      <div className="font-medium text-foreground">
-                                        {cc.called_at ? fmtDate(cc.called_at) : "Pending issue"}
+                                      <div className="font-medium text-foreground flex items-center gap-2">
+                                        {labelBadge}
+                                        {labelDate}
+                                        {statusBadge}
                                       </div>
-                                      {callSc && (
-                                        <div className="text-muted-foreground text-[11px] mt-0.5">
-                                          {callSc.name}{callSc.current_nav != null && ` · ${fmtCurrency(callSc.current_nav, currencyCode)}/share`}
-                                          {sharesForCall != null && ` · ${fmt(sharesForCall)} shares`}
-                                        </div>
+                                      {labelSubtext && (
+                                        <div className="text-muted-foreground text-[11px] mt-0.5">{labelSubtext}</div>
                                       )}
                                     </td>
-                                    <td className="py-2 px-3 text-right tabular-nums">{fmtCurrency(cc.amount, currencyCode)}</td>
-                                    <td className={`py-2 px-3 text-right tabular-nums ${isOverdue ? "text-destructive font-medium" : "text-muted-foreground"}`}>
-                                      {cc.due_date ? fmtDate(cc.due_date) : "—"}
-                                    </td>
-                                    <td className="py-2 px-3 text-right">
-                                      <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 font-medium ${statusClass}`}>
-                                        {statusLabel}
-                                      </span>
-                                    </td>
-                                    <td className="py-2 px-3 text-right text-muted-foreground">
-                                      {cc.received_at
-                                        ? fmtDate(cc.received_at)
-                                        : cc.status === "paid" && !cc.deployed_at
-                                        ? <CapitalCallReceive capitalCall={cc} entityUUID={entityUUID} currencyCode={currencyCode} label="Deploy funds" onSuccess={load} />
-                                        : cc.deployed_at ? fmtDate(cc.deployed_at) : "—"}
-                                    </td>
+                                    <td className="py-2 px-3 text-right tabular-nums">{paidCell}</td>
+                                    <td className="py-2 px-3 text-right tabular-nums">{deployedCell}</td>
+                                    <td className="py-2 px-3 text-right tabular-nums">{sharesCell}</td>
+                                    <td className="py-2 px-3 text-right tabular-nums">{distCell}</td>
+                                    <td className="py-2 px-3 text-right tabular-nums">{redCell}</td>
                                     <td className="py-2 px-3"></td>
-                                    <td className="py-2 px-3">
-                                      <div className="flex items-center justify-end">
-                                        {isDeployed ? (
-                                          <Lock className="size-3 text-muted-foreground/40" />
-                                        ) : (
-                                          <DropdownMenu>
-                                            <DropdownMenuTrigger asChild>
-                                              <Button variant="ghost" size="icon" className="size-6">
-                                                <MoreHorizontal className="size-3.5" />
-                                              </Button>
-                                            </DropdownMenuTrigger>
-                                            <DropdownMenuContent align="end">
-                                              <DropdownMenuItem onClick={() => setEditDialog({ open: true, call: cc, entryShareClass: eg.entry.share_class })}>
-                                                <Pencil className="size-3.5 mr-2" /> Edit
-                                              </DropdownMenuItem>
-                                              {!isLocked && (
-                                                <>
-                                                  <DropdownMenuSeparator />
-                                                  <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => deleteCall(cc.id)}>
-                                                    <Trash2 className="size-3.5 mr-2" /> Delete
-                                                  </DropdownMenuItem>
-                                                </>
-                                              )}
-                                            </DropdownMenuContent>
-                                          </DropdownMenu>
-                                        )}
-                                      </div>
-                                    </td>
+                                    <td className="py-2 px-3 text-right">{actionsCell}</td>
                                   </tr>
                                 )
                               })}
 
-                              {entryExpanded && eg.calls.length === 0 && (
+                              {entryExpanded && (movementsByEntry.get(eg.entry.id)?.length ?? 0) === 0 && (
                                 <tr className="bg-muted/20 border-b">
                                   <td colSpan={9} className="py-2 px-3 pl-14 text-xs text-muted-foreground">
-                                    No capital calls for this round.
+                                    No movements recorded for this round.
                                   </td>
                                 </tr>
                               )}
@@ -844,17 +1156,17 @@ export function FundCapTableView({
                 <tfoot>
                   <tr className="border-t text-xs font-medium">
                     <td colSpan={2} className="py-2 px-3 text-muted-foreground">Total</td>
-                    <td className="py-2 px-3 text-right tabular-nums">{fmtCurrency(totalCommitted, currencyCode)}</td>
-                    <td className="py-2 px-3 text-right tabular-nums">{totalCalled > 0 ? fmtCurrency(totalCalled, currencyCode) : "—"}</td>
-                    <td className="py-2 px-3 text-right tabular-nums">{totalCommitted > totalCalled ? fmtCurrency(totalCommitted - totalCalled, currencyCode) : "—"}</td>
+                    <td className="py-2 px-3 text-right tabular-nums">{totalPaid > 0 ? fmtCurrency(totalPaid, currencyCode) : "—"}</td>
                     <td className="py-2 px-3 text-right tabular-nums">{totalDeployed > 0 ? fmtCurrency(totalDeployed, currencyCode) : "—"}</td>
                     <td className="py-2 px-3 text-right tabular-nums">{totalShares > 0 ? fmt(totalShares) : "—"}</td>
+                    <td className="py-2 px-3 text-right tabular-nums text-amber-600">{totalDistributed > 0 ? `−${fmtCurrency(totalDistributed, currencyCode)}` : "—"}</td>
+                    <td className="py-2 px-3 text-right tabular-nums text-red-600">{totalRedeemed > 0 ? `−${fmtCurrency(totalRedeemed, currencyCode)}` : "—"}</td>
                     <td className="py-2 px-3 text-right tabular-nums">
                       {totalLiveValue > 0 ? (
                         <div>
                           <div>{fmtCurrency(totalLiveValue, currencyCode)}</div>
                           {totalDeployed > 0 && (() => {
-                            const gl = totalLiveValue - totalDeployed
+                            const gl = totalLiveValue + totalDistributed + totalRedeemed - totalDeployed
                             const pct = (gl / totalDeployed) * 100
                             const color = gl >= 0 ? "text-emerald-600" : "text-red-600"
                             return (
@@ -909,6 +1221,32 @@ export function FundCapTableView({
           onSuccess={load}
         />
       )}
+
+      {transferDialog.shareholder && transferDialog.entry && (() => {
+        const sellerEntryId = transferDialog.entry.id
+        const recipients: RecipientOption[] = groups
+          .flatMap((g) => g.entries.map((eg) => ({
+            entryId: eg.entry.id,
+            name: g.shareholder.name ?? "—",
+            email: g.shareholder.email ?? null,
+            netShares: eg.netShares,
+          })))
+          .filter((r) => r.entryId !== sellerEntryId && r.netShares >= 0)
+        return (
+          <ShareTransferDeclareDialog
+            open={transferDialog.open}
+            onClose={() => setTransferDialog({ open: false, shareholder: null, entry: null, netShares: 0 })}
+            sellerShareholder={transferDialog.shareholder}
+            sellerEntry={transferDialog.entry}
+            sellerAvailableShares={transferDialog.netShares}
+            recipients={recipients}
+            fundEntityUUID={entityUUID}
+            shareClasses={shareClasses}
+            currencyCode={currencyCode}
+            onSuccess={load}
+          />
+        )
+      })()}
 
       <AddFundInvestorDialog
         open={addInvestorOpen}

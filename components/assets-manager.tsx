@@ -21,6 +21,7 @@ import { BuySellDialog } from "@/components/buy-sell-dialog"
 import { MoneyInDialog } from "@/components/money-in-dialog"
 import { RevalueDialog } from "@/components/revalue-dialog"
 import { DistributionDialog } from "@/components/distribution-dialog"
+import { RedemptionDialog } from "@/components/redemption-dialog"
 import { AddAssetToSheetDialog } from "@/components/add-asset-to-sheet-dialog"
 import { AssetManagementSheet } from "@/components/asset-management-sheet"
 import { CreateSectionDialog } from "@/components/create-section-dialog"
@@ -1398,6 +1399,21 @@ export function AssetsManager({ entityUUID, baseCurrency: baseCurrencyProp, allo
                                     Distribution
                                   </DropdownMenuItem>
                                 </DistributionDialog>
+                              )}
+                              {!isSoldAsset && asset.investable !== "investable_cash" && cashAssets.length > 0 && (
+                                <RedemptionDialog
+                                  entityUUID={entityUUID}
+                                  assetId={asset.id}
+                                  assetName={asset.name ?? "Asset"}
+                                  cashAssets={cashAssets.map((c) => ({ id: c.id, name: c.name, currencyCode: c.currencyCode }))}
+                                  defaultCurrencyId={asset.currencyId ?? undefined}
+                                  onSuccess={() => void loadAssets()}
+                                >
+                                  <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
+                                    <Banknote className="size-3.5" />
+                                    Redemption
+                                  </DropdownMenuItem>
+                                </RedemptionDialog>
                               )}
                             </>
                           )}

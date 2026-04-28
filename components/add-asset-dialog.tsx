@@ -1120,7 +1120,7 @@ export function AddAssetDialog({
         c.name.toLowerCase().includes("cash"),
       )?.id;
       let resolvedCashAssetId = cashAssetId;
-      if (fundingSource !== "leveraged" && needsNewCashAccount && currencyId) {
+      if (!isCashClass && fundingSource !== "leveraged" && needsNewCashAccount && currencyId) {
         const newCashRes = await fetch("/api/assets", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1139,7 +1139,7 @@ export function AddAssetDialog({
       }
       // Remainder own_funds: create cash account if none exists
       let resolvedRemainderCashAssetId = remainderCashAssetId;
-      if (hasRemainder && remainderFundingSource === "own_funds" && needsRemainderCashAccount && currencyId) {
+      if (!isCashClass && hasRemainder && remainderFundingSource === "own_funds" && needsRemainderCashAccount && currencyId) {
         const existingOrNewCashId = resolvedCashAssetId || cashAssetId;
         if (existingOrNewCashId) {
           // Reuse the primary cash account if one was just created or already selected

@@ -22,6 +22,7 @@ import {
   Plus,
   RefreshCcw,
   Shield,
+  Upload,
   Star,
   Table,
   TrendingUp,
@@ -141,6 +142,7 @@ const ASSET_MANAGER_NAV: { label: string; items: { title: string; href: string; 
     items: [
       { title: "Mutations", href: "/mutations", icon: RefreshCcw },
       { title: "Transactions", href: "/transactions", icon: ArrowLeftRight },
+      { title: "Import", href: "/import-transactions", icon: Upload },
       { title: "Profit & Loss", href: "/profit-and-loss", icon: TrendingUp },
     ],
   },

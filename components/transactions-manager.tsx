@@ -1,8 +1,9 @@
 "use client"
 
 import * as React from "react"
-import { ArrowDownLeft, ArrowUpRight, Paperclip, Plus, Trash2 } from "lucide-react"
+import { ArrowDownLeft, ArrowUpRight, Paperclip, Pencil, Plus, Trash2 } from "lucide-react"
 import { AddTransactionDialog } from "@/components/add-transaction-dialog"
+import { EditTransactionDialog } from "@/components/edit-transaction-dialog"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -131,6 +132,7 @@ export function TransactionsManager({ entityUUID }: { entityUUID: string }) {
   const [confirmDeleteId, setConfirmDeleteId] = React.useState<string | null>(null)
   const [expandedIds, setExpandedIds] = React.useState<Set<string>>(new Set())
   const [docsDialogTxId, setDocsDialogTxId] = React.useState<string | null>(null)
+  const [editTx, setEditTx] = React.useState<EntityTransaction | null>(null)
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -267,6 +269,14 @@ export function TransactionsManager({ entityUUID }: { entityUUID: string }) {
                   <Paperclip className="size-3.5" />
                 </button>
 
+                <button
+                  className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                  onClick={(e) => { e.stopPropagation(); setEditTx(tx) }}
+                  title="Edit transaction"
+                >
+                  <Pencil className="size-3.5" />
+                </button>
+
                 {isConfirming ? (
                   <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                     <Button
@@ -334,6 +344,14 @@ export function TransactionsManager({ entityUUID }: { entityUUID: string }) {
           transactionId={docsDialogTxId}
         />
       )}
+
+      <EditTransactionDialog
+        open={!!editTx}
+        onClose={() => setEditTx(null)}
+        transaction={editTx}
+        entityUUID={entityUUID}
+        onSaved={() => { setEditTx(null); void load() }}
+      />
     </div>
   )
 }
