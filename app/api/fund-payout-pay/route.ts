@@ -131,6 +131,13 @@ export async function POST(req: NextRequest) {
   // 5. Find transaction type (Distribution = 9)
   const txTypeId = 9
 
+  // Resolve the fund cash asset's currency once — used for both legs.
+  const fundCashCurrency: number = fundCashAssetId
+    ? (await fetch(`${base}/asset/${fundCashAssetId}`, { headers: h, cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((a: { currency?: number | null } | null) => a?.currency ?? 1))
+    : 1
+
   // 6. Fund cash OUT
   if (fundCashAssetId) {
     const txRes = await fetch(`${base}/transaction`, {
@@ -149,7 +156,7 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify({
           transaction: tx.id, entity: fundEntityUUID,
           entry_type: "cash", object_type: "asset", object_id: fundCashAssetId,
-          direction: "out", amount,
+          direction: "out", currency: fundCashCurrency, amount,
           source: "cap", source_id: investorShareholderId,
         }),
       })
@@ -162,12 +169,6 @@ export async function POST(req: NextRequest) {
   if (investorEntityUUID) {
     // Find or create investor's cash asset (match currency from fund's cash asset)
     let investorCashAssetId: string | null = null
-    const fundCashCurrency = fundCashAssetId
-      ? (await fetch(`${base}/asset/${fundCashAssetId}`, { headers: h, cache: "no-store" })
-          .then((r) => r.ok ? r.json() : null)
-          .then((a: { currency?: number | null } | null) => a?.currency ?? 1))
-      : 1
-
     const invAssetsRes = await fetch(`${base}/asset?entity=${investorEntityUUID}`, { headers: h, cache: "no-store" })
     if (invAssetsRes.ok) {
       const invAssets = (await invAssetsRes.json()) as AssetRecord[]
@@ -207,7 +208,7 @@ export async function POST(req: NextRequest) {
           body: JSON.stringify({
             transaction: tx.id, entity: investorEntityUUID,
             entry_type: "cash", object_type: "asset", object_id: investorCashAssetId,
-            direction: "in", amount,
+            direction: "in", currency: fundCashCurrency, amount,
             source: "cap", source_id: investorShareholderId,
           }),
         })

@@ -97,6 +97,7 @@ export type CapTableEntry = {
   shares_issued: number | null
   price_per_share: number | null
   committed_amount: number | null
+  currency?: number | null
   issued_at: number | null
   notes: string | null
   created_at: number

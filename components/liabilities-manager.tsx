@@ -158,15 +158,14 @@ function AccruedFeesSection({
     setBulkSaving(true)
     try {
       const ts = bulkDate.getTime()
-      await Promise.all(
-        Array.from(selectedIds).map((id) =>
-          fetch(`/api/fund-fees/${id}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status: "paid", paid_at: ts }),
-          }),
-        ),
-      )
+      // Sequential: each call writes a transaction + entry, predictable ordering.
+      for (const id of Array.from(selectedIds)) {
+        await fetch(`/api/fund-fee-pay`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, date: ts }),
+        })
+      }
       setBulkOpen(false)
       await load()
     } finally {

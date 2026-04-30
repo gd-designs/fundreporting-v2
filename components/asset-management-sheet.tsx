@@ -36,6 +36,15 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
@@ -187,6 +196,13 @@ export function AssetManagementSheet({
     string | null
   >(null);
   const [activeTab, setActiveTab] = React.useState("overview");
+  // Ledger pagination — show 50 rows per page; shadcn Pagination drives navigation.
+  const LEDGER_PAGE_SIZE = 50;
+  const [ledgerPage, setLedgerPage] = React.useState(1);
+  // Reset to page 1 whenever a different asset is selected.
+  React.useEffect(() => {
+    setLedgerPage(1)
+  }, [asset?.id])
 
   const [investable, setInvestable] = React.useState<string | null>(null);
   const [taxable, setTaxable] = React.useState<string | null>(null);
@@ -1427,6 +1443,10 @@ export function AssetManagementSheet({
                         {ledgerRows
                           .slice()
                           .reverse()
+                          .slice(
+                            (ledgerPage - 1) * LEDGER_PAGE_SIZE,
+                            ledgerPage * LEDGER_PAGE_SIZE,
+                          )
                           .map((row) => {
                             if (row.kind === "mutation") {
                               const isUp = row.delta >= 0;
@@ -1822,6 +1842,77 @@ export function AssetManagementSheet({
                           })}
                       </tbody>
                     </table>
+                    {(() => {
+                      const total = ledgerRows.length
+                      const pageCount = Math.max(1, Math.ceil(total / LEDGER_PAGE_SIZE))
+                      if (pageCount <= 1) return null
+                      const current = Math.min(ledgerPage, pageCount)
+                      const fromIdx = (current - 1) * LEDGER_PAGE_SIZE + 1
+                      const toIdx = Math.min(total, current * LEDGER_PAGE_SIZE)
+                      // Show first, last, current ±1 — collapse rest with ellipsis.
+                      const pages: Array<number | "ellipsis"> = []
+                      const push = (n: number) => { if (!pages.includes(n)) pages.push(n) }
+                      push(1)
+                      if (current - 1 > 2) pages.push("ellipsis")
+                      if (current - 1 >= 2) push(current - 1)
+                      if (current !== 1 && current !== pageCount) push(current)
+                      if (current + 1 <= pageCount - 1) push(current + 1)
+                      if (current + 1 < pageCount - 1) pages.push("ellipsis")
+                      if (pageCount > 1) push(pageCount)
+                      return (
+                        <div className="flex items-center justify-between border-t px-3 py-2">
+                          <p className="text-muted-foreground text-xs">
+                            Showing {fromIdx}–{toIdx} of {total}
+                          </p>
+                          <Pagination className="m-0 w-auto justify-end mx-0">
+                            <PaginationContent>
+                              <PaginationItem>
+                                <PaginationPrevious
+                                  href="#"
+                                  onClick={(e) => {
+                                    e.preventDefault()
+                                    setLedgerPage((p) => Math.max(1, p - 1))
+                                  }}
+                                  aria-disabled={current === 1}
+                                  className={current === 1 ? "pointer-events-none opacity-50" : ""}
+                                />
+                              </PaginationItem>
+                              {pages.map((p, i) =>
+                                p === "ellipsis" ? (
+                                  <PaginationItem key={`e-${i}`}>
+                                    <PaginationEllipsis />
+                                  </PaginationItem>
+                                ) : (
+                                  <PaginationItem key={p}>
+                                    <PaginationLink
+                                      href="#"
+                                      isActive={p === current}
+                                      onClick={(e) => {
+                                        e.preventDefault()
+                                        setLedgerPage(p)
+                                      }}
+                                    >
+                                      {p}
+                                    </PaginationLink>
+                                  </PaginationItem>
+                                ),
+                              )}
+                              <PaginationItem>
+                                <PaginationNext
+                                  href="#"
+                                  onClick={(e) => {
+                                    e.preventDefault()
+                                    setLedgerPage((p) => Math.min(pageCount, p + 1))
+                                  }}
+                                  aria-disabled={current === pageCount}
+                                  className={current === pageCount ? "pointer-events-none opacity-50" : ""}
+                                />
+                              </PaginationItem>
+                            </PaginationContent>
+                          </Pagination>
+                        </div>
+                      )
+                    })()}
                   </div>
                 )}
               </TabsContent>

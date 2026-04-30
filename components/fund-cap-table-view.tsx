@@ -413,6 +413,9 @@ export function FundCapTableView({
   }
   const [payouts, setPayouts] = React.useState<PayoutRecord[]>([])
   const [transfers, setTransfers] = React.useState<TransferRecord[]>([])
+  // Currency lookup (id → ISO code), and FX rates from foreign currencies → fund currency.
+  const [currencyMap, setCurrencyMap] = React.useState<Map<number, string>>(new Map())
+  const [fxRates, setFxRates] = React.useState<Record<string, number>>({})
   const [loading, setLoading] = React.useState(true)
   // Keys: "sh:{id}" for shareholder rows, "entry:{id}" for entry rows
   const [expandedRows, setExpandedRows] = React.useState<Set<string>>(new Set())
@@ -421,6 +424,8 @@ export function FundCapTableView({
   const [reinvestDialog, setReinvestDialog] = React.useState<{ open: boolean; shareholder: CapTableShareholder | null; entry: CapTableEntry | null }>({ open: false, shareholder: null, entry: null })
   const [transferDialog, setTransferDialog] = React.useState<{ open: boolean; shareholder: CapTableShareholder | null; entry: CapTableEntry | null; netShares: number }>({ open: false, shareholder: null, entry: null, netShares: 0 })
   const [executingTransferId, setExecutingTransferId] = React.useState<string | null>(null)
+  // "all" or a specific ISO code (e.g. "USD") — filters the cap table to entries in that currency.
+  const [currencyFilter, setCurrencyFilter] = React.useState<string>("all")
 
   async function executeTransfer(id: string) {
     if (!confirm("Execute this transfer now? This will create the fund mutations and ledger entries on both sides.")) return
@@ -449,7 +454,7 @@ export function FundCapTableView({
   async function load() {
     setLoading(true)
     try {
-      const [c, en, sh, sc, muts, po, tr] = await Promise.all([
+      const [c, en, sh, sc, muts, po, tr, currencies] = await Promise.all([
         fetchCapitalCalls(entityUUID),
         fetchCapTableEntries(entityUUID),
         fetchCapTableShareholders(entityUUID),
@@ -460,6 +465,7 @@ export function FundCapTableView({
           fetch(`/api/share-transfers?entity=${entityUUID}&status=pending`).then((r) => r.ok ? r.json() : []).catch(() => []),
           fetch(`/api/share-transfers?entity=${entityUUID}&status=executed`).then((r) => r.ok ? r.json() : []),
         ]).then(([p, e]) => [...(Array.isArray(p) ? p : []), ...(Array.isArray(e) ? e : [])]),
+        fetch("/api/currencies").then((r) => r.ok ? r.json() : []).catch(() => []),
       ])
       setCalls(c)
       setEntries(en)
@@ -468,6 +474,36 @@ export function FundCapTableView({
       setMutations(Array.isArray(muts) ? muts : [])
       setPayouts(Array.isArray(po) ? po : [])
       setTransfers(Array.isArray(tr) ? tr : [])
+
+      // Build id→code map for currencies
+      const cmap = new Map<number, string>()
+      for (const cu of (currencies as Array<{ id: number; code?: string | null }>)) {
+        if (cu.code) cmap.set(cu.id, cu.code)
+      }
+      setCurrencyMap(cmap)
+
+      // Fetch FX rates for any non-fund currencies that appear on entries
+      const fundCode = (currencyCode || "EUR").toUpperCase()
+      const foreignCodes = Array.from(
+        new Set(
+          (en as CapTableEntry[])
+            .map((e) => (e.currency != null ? cmap.get(e.currency) : null))
+            .filter((code): code is string => !!code && code.toUpperCase() !== fundCode),
+        ),
+      )
+      if (foreignCodes.length > 0) {
+        try {
+          const fxRes = await fetch(`/api/fx?base=${fundCode}&from=${foreignCodes.join(",")}`)
+          if (fxRes.ok) {
+            const fx = (await fxRes.json()) as { rates?: Record<string, number> }
+            setFxRates(fx.rates ?? {})
+          }
+        } catch {
+          /* ignore — fall back to no conversion */
+        }
+      } else {
+        setFxRates({})
+      }
     } finally {
       setLoading(false)
     }
@@ -567,7 +603,56 @@ export function FundCapTableView({
     return result
   }, [sharesByEntryMap, entries, shareClasses, calls, mutations])
 
-  const groups = buildShareholderGroups(shareholders, entries, calls, liveValueByEntry, sharesByEntryMap)
+  const allGroups = buildShareholderGroups(shareholders, entries, calls, liveValueByEntry, sharesByEntryMap)
+
+  // Per-entry currency code — falls back to the fund's currency.
+  const fundCode = (currencyCode || "EUR").toUpperCase()
+  const entryCurrencyCode = React.useMemo(() => {
+    const map = new Map<string, string>()
+    for (const e of entries) {
+      const code = e.currency != null ? currencyMap.get(e.currency) : null
+      map.set(e.id, (code ?? fundCode).toUpperCase())
+    }
+    return map
+  }, [entries, currencyMap, fundCode])
+
+  // All distinct currencies present on cap table entries (for the filter dropdown).
+  const availableCurrencies = React.useMemo(() => {
+    const set = new Set<string>()
+    for (const code of entryCurrencyCode.values()) set.add(code)
+    return Array.from(set).sort()
+  }, [entryCurrencyCode])
+
+  // Apply currency filter: drop entries whose currency doesn't match, then drop
+  // shareholders left with no entries.
+  const groups = React.useMemo(() => {
+    if (currencyFilter === "all") return allGroups
+    return allGroups
+      .map((g) => ({
+        ...g,
+        entries: g.entries.filter((eg) => entryCurrencyCode.get(eg.entry.id) === currencyFilter),
+      }))
+      .filter((g) => g.entries.length > 0)
+      .map((g) => ({
+        ...g,
+        totalLiveValue: g.entries.reduce((s, eg) => s + eg.liveValue, 0),
+        totalShares: g.entries.reduce((s, eg) => s + eg.netShares, 0),
+        totalCommitted: g.entries.reduce((s, eg) => s + (eg.entry.committed_amount ?? 0), 0),
+        totalCalled: g.entries.flatMap((eg) => eg.calls).reduce((s, c) => s + (c.amount ?? 0), 0),
+        totalDeployed: g.entries.flatMap((eg) => eg.calls).filter((c) => c.deployed_at != null).reduce((s, c) => s + (c.amount ?? 0), 0),
+      }))
+  }, [allGroups, currencyFilter, entryCurrencyCode])
+
+  // Convert an amount in `fromCode` to the fund's currency using fetched FX rates.
+  const toFundCurrency = React.useCallback(
+    (amount: number, fromCode: string): number => {
+      if (!amount || fromCode === fundCode) return amount
+      const rate = fxRates[fromCode]
+      if (!rate) return amount // FX unavailable — show raw value rather than hide
+      return amount * rate
+    },
+    [fundCode, fxRates],
+  )
 
   // Deployed = deployed capital_call.amount + executed share_transfer net flow.
   // Buyer inherits already-deployed capital (auto-deployed); seller loses deployed.
@@ -731,13 +816,33 @@ export function FundCapTableView({
     return map
   }, [calls, payouts, transfers, nameByEntryId])
 
-  const totalPaid = Array.from(paidByEntry.values()).reduce((s, v) => s + v, 0)
-  const totalDistributed = Array.from(distributedByEntry.values()).reduce((s, v) => s + v, 0)
-  const totalRedeemed = Array.from(redeemedByEntry.values()).reduce((s, v) => s + v, 0)
-  const totalDeployed = Array.from(deployedByEntry.values()).reduce((s, v) => s + v, 0)
+  // Aggregate per-entry amounts. When a currency filter is active we keep values
+  // native (no FX needed since all entries share the same currency). When viewing
+  // "all", convert each entry's amount to the fund currency before summing.
+  const sumInFundCcy = (m: Map<string, number>): number => {
+    let total = 0
+    for (const [entryId, amt] of m.entries()) {
+      if (!amt) continue
+      const ccy = entryCurrencyCode.get(entryId) ?? fundCode
+      if (currencyFilter !== "all" && ccy !== currencyFilter) continue
+      total += currencyFilter !== "all" ? amt : toFundCurrency(amt, ccy)
+    }
+    return total
+  }
+  // Currency code to use for displaying totals (filter currency, or fund code).
+  const totalsCurrencyCode = currencyFilter !== "all" ? currencyFilter : fundCode
+  const liveValueByEntryFx = React.useMemo(() => {
+    const m = new Map<string, number>()
+    for (const e of entries) m.set(e.id, liveValueByEntry.get(e.id) ?? 0)
+    return m
+  }, [entries, liveValueByEntry])
+  const totalPaid = sumInFundCcy(paidByEntry)
+  const totalDistributed = sumInFundCcy(distributedByEntry)
+  const totalRedeemed = sumInFundCcy(redeemedByEntry)
+  const totalDeployed = sumInFundCcy(deployedByEntry)
 
-  // Total live value = sum of all per-entry live values (includes deployed fallback)
-  const totalLiveValue = groups.reduce((s, g) => s + g.totalLiveValue, 0)
+  // Total live value = sum of all per-entry live values, FX-converted to fund ccy.
+  const totalLiveValue = sumInFundCcy(liveValueByEntryFx)
   const totalShares = groups.reduce((s, g) => s + g.totalShares, 0)
 
   if (loading) {
@@ -762,11 +867,11 @@ export function FundCapTableView({
             const gl = totalDeployed > 0 ? totalLiveValue + totalDistributed + totalRedeemed - totalDeployed : null
             return [
               { label: "Investors", value: String(groups.length) },
-              { label: "Paid", value: fmtCurrency(totalPaid, currencyCode) },
-              { label: "Deployed", value: fmtCurrency(totalDeployed, currencyCode) },
+              { label: "Paid", value: fmtCurrency(totalPaid, totalsCurrencyCode) },
+              { label: "Deployed", value: fmtCurrency(totalDeployed, totalsCurrencyCode) },
               { label: "Shares", value: totalShares > 0 ? fmt(totalShares) : "—" },
-              { label: "Current NAV", value: currentNav != null ? fmtCurrency(currentNav, currencyCode) : "—" },
-              { label: "Live value", value: fmtCurrency(totalLiveValue, currencyCode), gl, glBase: totalDeployed },
+              { label: "Current NAV", value: currentNav != null ? fmtCurrency(currentNav, totalsCurrencyCode) : "—" },
+              { label: "Live value", value: fmtCurrency(totalLiveValue, totalsCurrencyCode), gl, glBase: totalDeployed },
             ]
           })().map((s) => (
             <div key={s.label} className="rounded-lg border p-4">
@@ -779,7 +884,7 @@ export function FundCapTableView({
                 const color = glVal >= 0 ? "text-emerald-600" : "text-red-600"
                 return (
                   <p className={`text-xs tabular-nums mt-0.5 ${color}`}>
-                    {glVal >= 0 ? "+" : ""}{fmtCurrency(glVal, currencyCode)} ({glVal >= 0 ? "+" : ""}{pct.toFixed(1)}%)
+                    {glVal >= 0 ? "+" : ""}{fmtCurrency(glVal, totalsCurrencyCode)} ({glVal >= 0 ? "+" : ""}{pct.toFixed(1)}%)
                   </p>
                 )
               })()}
@@ -822,10 +927,25 @@ export function FundCapTableView({
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-3">
             <CardTitle className="text-base">Cap Table</CardTitle>
-            <Button size="sm" variant="outline" onClick={() => setAddInvestorOpen(true)}>
-              <UserPlus className="size-3.5 mr-1.5" />
-              Add investor
-            </Button>
+            <div className="flex items-center gap-2">
+              {availableCurrencies.length > 1 && (
+                <Select value={currencyFilter} onValueChange={setCurrencyFilter}>
+                  <SelectTrigger size="sm" className="h-8 text-xs gap-1.5">
+                    <SelectValue placeholder="Currency" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All currencies</SelectItem>
+                    {availableCurrencies.map((code) => (
+                      <SelectItem key={code} value={code}>{code}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              <Button size="sm" variant="outline" onClick={() => setAddInvestorOpen(true)}>
+                <UserPlus className="size-3.5 mr-1.5" />
+                Add investor
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="p-0">
             {isEmpty ? (
@@ -857,11 +977,37 @@ export function FundCapTableView({
                   {groups.map((group) => {
                     const shKey = `sh:${group.shareholder.id}`
                     const shExpanded = expandedRows.has(shKey)
-                    const groupPaid = group.entries.reduce((s, eg) => s + (paidByEntry.get(eg.entry.id) ?? 0), 0)
-                    const groupDeployed = group.entries.reduce((s, eg) => s + (deployedByEntry.get(eg.entry.id) ?? 0), 0)
-                    const groupDistributed = group.entries.reduce((s, eg) => s + (distributedByEntry.get(eg.entry.id) ?? 0), 0)
-                    const groupRedeemed = group.entries.reduce((s, eg) => s + (redeemedByEntry.get(eg.entry.id) ?? 0), 0)
+                    // Aggregate per-entry amounts in the fund's currency so multi-currency
+                    // shareholders display correctly.
+                    const sumEntries = (m: Map<string, number>) =>
+                      group.entries.reduce((s, eg) => {
+                        const v = m.get(eg.entry.id) ?? 0
+                        const ccy = entryCurrencyCode.get(eg.entry.id) ?? fundCode
+                        return s + toFundCurrency(v, ccy)
+                      }, 0)
+                    const groupPaid = sumEntries(paidByEntry)
+                    const groupDeployed = sumEntries(deployedByEntry)
+                    const groupDistributed = sumEntries(distributedByEntry)
+                    const groupRedeemed = sumEntries(redeemedByEntry)
+                    const groupLiveValue = sumEntries(liveValueByEntryFx)
                     const entryCount = group.entries.length
+
+                    // Determine the shareholder's primary currency for display.
+                    // If all entries share one currency, show that as the primary
+                    // and fund currency as a sub-line (FX-converted).
+                    const groupCurrencies = new Set(group.entries.map((eg) => entryCurrencyCode.get(eg.entry.id) ?? fundCode))
+                    const groupPrimaryCcy = groupCurrencies.size === 1
+                      ? Array.from(groupCurrencies)[0]
+                      : fundCode
+                    const showFx = groupPrimaryCcy !== fundCode
+                    // Sum each map in the primary currency (no FX) when single-ccy.
+                    const sumNative = (m: Map<string, number>) =>
+                      group.entries.reduce((s, eg) => s + (m.get(eg.entry.id) ?? 0), 0)
+                    const nativePaid = showFx ? sumNative(paidByEntry) : groupPaid
+                    const nativeDeployed = showFx ? sumNative(deployedByEntry) : groupDeployed
+                    const nativeDistributed = showFx ? sumNative(distributedByEntry) : groupDistributed
+                    const nativeRedeemed = showFx ? sumNative(redeemedByEntry) : groupRedeemed
+                    const nativeLiveValue = showFx ? sumNative(liveValueByEntryFx) : groupLiveValue
 
                     return (
                       <React.Fragment key={group.shareholder.id}>
@@ -884,22 +1030,23 @@ export function FundCapTableView({
                               )}
                             </button>
                           </td>
-                          <td className="py-2.5 px-3 text-right tabular-nums">{groupPaid > 0 ? fmtCurrency(groupPaid, currencyCode) : "—"}</td>
-                          <td className="py-2.5 px-3 text-right tabular-nums">{groupDeployed > 0 ? fmtCurrency(groupDeployed, currencyCode) : "—"}</td>
+                          <td className="py-2.5 px-3 text-right tabular-nums">{nativePaid > 0 ? fmtCurrency(nativePaid, groupPrimaryCcy) : "—"}</td>
+                          <td className="py-2.5 px-3 text-right tabular-nums">{nativeDeployed > 0 ? fmtCurrency(nativeDeployed, groupPrimaryCcy) : "—"}</td>
                           <td className="py-2.5 px-3 text-right tabular-nums">{group.totalShares > 0 ? fmt(group.totalShares) : "—"}</td>
-                          <td className="py-2.5 px-3 text-right tabular-nums text-amber-600">{groupDistributed > 0 ? `−${fmtCurrency(groupDistributed, currencyCode)}` : "—"}</td>
-                          <td className="py-2.5 px-3 text-right tabular-nums text-red-600">{groupRedeemed > 0 ? `−${fmtCurrency(groupRedeemed, currencyCode)}` : "—"}</td>
+                          <td className="py-2.5 px-3 text-right tabular-nums text-amber-600">{nativeDistributed > 0 ? `−${fmtCurrency(nativeDistributed, groupPrimaryCcy)}` : "—"}</td>
+                          <td className="py-2.5 px-3 text-right tabular-nums text-red-600">{nativeRedeemed > 0 ? `−${fmtCurrency(nativeRedeemed, groupPrimaryCcy)}` : "—"}</td>
                           <td className="py-2.5 px-3 text-right tabular-nums">
-                            {group.totalLiveValue > 0 ? (
+                            {nativeLiveValue > 0 ? (
                               <div>
-                                <div>{fmtCurrency(group.totalLiveValue, currencyCode)}</div>
+                                <div>{fmtCurrency(nativeLiveValue, groupPrimaryCcy)}</div>
+                                {showFx && <div className="text-[10px] text-muted-foreground">{fmtCurrency(groupLiveValue, fundCode)}</div>}
                                 {groupDeployed > 0 && (() => {
-                                  const gl = group.totalLiveValue + groupDistributed + groupRedeemed - groupDeployed
+                                  const gl = groupLiveValue + groupDistributed + groupRedeemed - groupDeployed
                                   const pct = (gl / groupDeployed) * 100
                                   const color = gl >= 0 ? "text-emerald-600" : "text-red-600"
                                   return (
                                     <div className={`text-[11px] ${color}`}>
-                                      {gl >= 0 ? "+" : ""}{fmtCurrency(gl, currencyCode)} ({gl >= 0 ? "+" : ""}{pct.toFixed(1)}%)
+                                      {gl >= 0 ? "+" : ""}{fmtCurrency(gl, fundCode)} ({gl >= 0 ? "+" : ""}{pct.toFixed(1)}%)
                                     </div>
                                   )
                                 })()}
@@ -956,28 +1103,37 @@ export function FundCapTableView({
                                     )}
                                   </div>
                                 </td>
-                                <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{entryPaid > 0 ? fmtCurrency(entryPaid, currencyCode) : "—"}</td>
-                                <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{entryDeployed > 0 ? fmtCurrency(entryDeployed, currencyCode) : "—"}</td>
-                                <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{eg.netShares > 0 ? fmt(eg.netShares) : "—"}</td>
-                                <td className="py-2 px-3 text-right tabular-nums text-amber-600/80">{entryDistributed > 0 ? `−${fmtCurrency(entryDistributed, currencyCode)}` : "—"}</td>
-                                <td className="py-2 px-3 text-right tabular-nums text-red-600/80">{entryRedeemed > 0 ? `−${fmtCurrency(entryRedeemed, currencyCode)}` : "—"}</td>
-                                <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">
-                                  {entryLiveValue > 0 ? (
-                                    <div>
-                                      <div>{fmtCurrency(entryLiveValue, currencyCode)}</div>
-                                      {entryDeployed > 0 && (() => {
-                                        const gl = entryLiveValue + entryDistributed + entryRedeemed - entryDeployed
-                                        const pct = (gl / entryDeployed) * 100
-                                        const color = gl >= 0 ? "text-emerald-600" : "text-red-600"
-                                        return (
-                                          <div className={`text-[11px] ${color}`}>
-                                            {gl >= 0 ? "+" : ""}{fmtCurrency(gl, currencyCode)} ({gl >= 0 ? "+" : ""}{pct.toFixed(1)}%)
-                                          </div>
-                                        )
-                                      })()}
-                                    </div>
-                                  ) : "—"}
-                                </td>
+                                {(() => {
+                                  const entryCcy = entryCurrencyCode.get(eg.entry.id) ?? fundCode
+                                  const showFundFx = entryCcy !== fundCode
+                                  return <>
+                                    <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{entryPaid > 0 ? fmtCurrency(entryPaid, entryCcy) : "—"}</td>
+                                    <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{entryDeployed > 0 ? fmtCurrency(entryDeployed, entryCcy) : "—"}</td>
+                                    <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">{eg.netShares > 0 ? fmt(eg.netShares) : "—"}</td>
+                                    <td className="py-2 px-3 text-right tabular-nums text-amber-600/80">{entryDistributed > 0 ? `−${fmtCurrency(entryDistributed, entryCcy)}` : "—"}</td>
+                                    <td className="py-2 px-3 text-right tabular-nums text-red-600/80">{entryRedeemed > 0 ? `−${fmtCurrency(entryRedeemed, entryCcy)}` : "—"}</td>
+                                    <td className="py-2 px-3 text-right tabular-nums text-muted-foreground">
+                                      {entryLiveValue > 0 ? (
+                                        <div>
+                                          <div>{fmtCurrency(entryLiveValue, entryCcy)}</div>
+                                          {showFundFx && (
+                                            <div className="text-[11px] text-muted-foreground">{fmtCurrency(toFundCurrency(entryLiveValue, entryCcy), fundCode)}</div>
+                                          )}
+                                          {entryDeployed > 0 && (() => {
+                                            const gl = entryLiveValue + entryDistributed + entryRedeemed - entryDeployed
+                                            const pct = (gl / entryDeployed) * 100
+                                            const color = gl >= 0 ? "text-emerald-600" : "text-red-600"
+                                            return (
+                                              <div className={`text-[11px] ${color}`}>
+                                                {gl >= 0 ? "+" : ""}{fmtCurrency(gl, entryCcy)} ({gl >= 0 ? "+" : ""}{pct.toFixed(1)}%)
+                                              </div>
+                                            )
+                                          })()}
+                                        </div>
+                                      ) : "—"}
+                                    </td>
+                                  </>
+                                })()}
                                 <td className="py-2 px-3 text-right">
                                   <div className="flex items-center justify-end gap-2">
                                     <span className="text-xs text-muted-foreground">
@@ -1046,11 +1202,13 @@ export function FundCapTableView({
                                   labelSubtext = callSc ? (
                                     <>{callSc.name}{callSc.current_nav != null && ` · ${fmtCurrency(callSc.current_nav, currencyCode)}/share`}</>
                                   ) : null
-                                  paidCell = isPaid ? <span className="text-emerald-700">+{fmtCurrency(cc.amount, currencyCode)}</span> : <span className="text-muted-foreground">{fmtCurrency(cc.amount, currencyCode)}</span>
+                                  // Capital call inherits its entry's currency.
+                                  const callCcy = entryCurrencyCode.get(eg.entry.id) ?? fundCode
+                                  paidCell = isPaid ? <span className="text-emerald-700">+{fmtCurrency(cc.amount, callCcy)}</span> : <span className="text-muted-foreground">{fmtCurrency(cc.amount, callCcy)}</span>
                                   deployedCell = isDeployed
-                                    ? <span className="text-emerald-700">+{fmtCurrency(cc.amount, currencyCode)}</span>
+                                    ? <span className="text-emerald-700">+{fmtCurrency(cc.amount, callCcy)}</span>
                                     : (cc.status === "paid"
-                                      ? <CapitalCallReceive capitalCall={cc} entityUUID={entityUUID} currencyCode={currencyCode} label="Deploy" onSuccess={load} />
+                                      ? <CapitalCallReceive capitalCall={cc} entityUUID={entityUUID} currencyCode={callCcy} label="Deploy" onSuccess={load} />
                                       : "")
                                   sharesCell = sharesForCall != null ? <span className="text-muted-foreground">{fmt(sharesForCall)}</span> : ""
                                   statusBadge = <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 font-medium ${statusClass}`}>{statusLabel}</span>
@@ -1185,22 +1343,22 @@ export function FundCapTableView({
                 <tfoot>
                   <tr className="border-t text-xs font-medium">
                     <td colSpan={2} className="py-2 px-3 text-muted-foreground">Total</td>
-                    <td className="py-2 px-3 text-right tabular-nums">{totalPaid > 0 ? fmtCurrency(totalPaid, currencyCode) : "—"}</td>
-                    <td className="py-2 px-3 text-right tabular-nums">{totalDeployed > 0 ? fmtCurrency(totalDeployed, currencyCode) : "—"}</td>
+                    <td className="py-2 px-3 text-right tabular-nums">{totalPaid > 0 ? fmtCurrency(totalPaid, totalsCurrencyCode) : "—"}</td>
+                    <td className="py-2 px-3 text-right tabular-nums">{totalDeployed > 0 ? fmtCurrency(totalDeployed, totalsCurrencyCode) : "—"}</td>
                     <td className="py-2 px-3 text-right tabular-nums">{totalShares > 0 ? fmt(totalShares) : "—"}</td>
-                    <td className="py-2 px-3 text-right tabular-nums text-amber-600">{totalDistributed > 0 ? `−${fmtCurrency(totalDistributed, currencyCode)}` : "—"}</td>
-                    <td className="py-2 px-3 text-right tabular-nums text-red-600">{totalRedeemed > 0 ? `−${fmtCurrency(totalRedeemed, currencyCode)}` : "—"}</td>
+                    <td className="py-2 px-3 text-right tabular-nums text-amber-600">{totalDistributed > 0 ? `−${fmtCurrency(totalDistributed, totalsCurrencyCode)}` : "—"}</td>
+                    <td className="py-2 px-3 text-right tabular-nums text-red-600">{totalRedeemed > 0 ? `−${fmtCurrency(totalRedeemed, totalsCurrencyCode)}` : "—"}</td>
                     <td className="py-2 px-3 text-right tabular-nums">
                       {totalLiveValue > 0 ? (
                         <div>
-                          <div>{fmtCurrency(totalLiveValue, currencyCode)}</div>
+                          <div>{fmtCurrency(totalLiveValue, totalsCurrencyCode)}</div>
                           {totalDeployed > 0 && (() => {
                             const gl = totalLiveValue + totalDistributed + totalRedeemed - totalDeployed
                             const pct = (gl / totalDeployed) * 100
                             const color = gl >= 0 ? "text-emerald-600" : "text-red-600"
                             return (
                               <div className={`text-[11px] ${color}`}>
-                                {gl >= 0 ? "+" : ""}{fmtCurrency(gl, currencyCode)} ({gl >= 0 ? "+" : ""}{pct.toFixed(1)}%)
+                                {gl >= 0 ? "+" : ""}{fmtCurrency(gl, totalsCurrencyCode)} ({gl >= 0 ? "+" : ""}{pct.toFixed(1)}%)
                               </div>
                             )
                           })()}

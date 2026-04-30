@@ -698,6 +698,8 @@ function OpenPeriodDialog({
 
   const [label, setLabel] = React.useState("")
   const [openedAt, setOpenedAt] = React.useState<Date | undefined>(suggestedOpenDate)
+  const [navStart, setNavStart] = React.useState("")
+  const navTouchedRef = React.useRef(false)
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
@@ -705,10 +707,21 @@ function OpenPeriodDialog({
     if (open) {
       setLabel("")
       setOpenedAt(suggestedOpenDate)
+      navTouchedRef.current = false
+      setNavStart("")
       setError(null)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
+
+  // Keep NAV input synced with the suggested value until the user manually
+  // edits it. The suggestion may shift after async fee data loads.
+  React.useEffect(() => {
+    if (!open || navTouchedRef.current) return
+    if (suggestedShares <= 0) return
+    const defaultNav = suggestedAum / suggestedShares
+    if (defaultNav > 0) setNavStart(defaultNav.toFixed(4))
+  }, [open, suggestedAum, suggestedShares])
 
   // Summary rows showing breakdown
   const prevShares = previousPeriod?.total_shares_end ?? 0
@@ -733,7 +746,9 @@ function OpenPeriodDialog({
           status: "open",
           label: label || null,
           opened_at: openedAt ? openedAt.getTime() : Date.now(),
-          ...(suggestedNav != null ? { nav_start: suggestedNav } : {}),
+          ...(navStart && Number(navStart) > 0
+            ? { nav_start: Number(navStart) }
+            : suggestedNav != null ? { nav_start: suggestedNav } : {}),
           total_shares_start: suggestedShares,
           ...(suggestedAum > 0 ? { total_aum_start: suggestedAum } : {}),
         }),
@@ -812,6 +827,22 @@ function OpenPeriodDialog({
             </Field>
             <DatePickerInput id="op-opened-at" label="Opening date" value={openedAt} onChange={setOpenedAt} />
           </div>
+
+          <Field>
+            <FieldLabel htmlFor="op-nav">NAV per share</FieldLabel>
+            <Input
+              id="op-nav"
+              type="number" min="0" step="0.0001"
+              placeholder="0.0000"
+              value={navStart}
+              onChange={(e) => { navTouchedRef.current = true; setNavStart(e.target.value) }}
+            />
+            {suggestedShares > 0 && (
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Suggested: {fmtCcy(suggestedAum / suggestedShares, currencyCode)} (opening AUM ÷ shares)
+              </p>
+            )}
+          </Field>
 
           {periodFrequency && previousPeriod?.closed_at && (
             <p className="text-xs text-muted-foreground">
@@ -2341,6 +2372,26 @@ function DistributionStep({
   const toSave = positions.filter((p) => amounts[p.entryId] && Number(amounts[p.entryId]) > 0)
   const allRecorded = positions.length > 0 && positions.every((p) => recordedIds[p.entryId] != null)
 
+  // Bulk per-share input — only meaningful for profit-style schemes where the
+  // payout is computed as shares × per-share amount.
+  const hasProfitScheme = shareClasses.some((sc) =>
+    (sc._share_class_distribution ?? []).some((d) => d.enabled !== false && d.basis === "profit"),
+  )
+  const [perShareAmount, setPerShareAmount] = React.useState("")
+  function applyPerShare(raw: string) {
+    setPerShareAmount(raw)
+    const v = Number(raw)
+    if (raw === "" || !Number.isFinite(v) || v <= 0) return
+    setAmounts((prev) => {
+      const next = { ...prev }
+      for (const pos of positions) {
+        if (pos.netShares <= 0.0001) continue
+        next[pos.entryId] = (pos.netShares * v).toFixed(2)
+      }
+      return next
+    })
+  }
+
   async function handleAddDistributions() {
     if (toSave.length === 0) { onDone(); return }
     setSaving(true); setError(null)
@@ -2422,6 +2473,31 @@ function DistributionStep({
 
   return (
     <div className="flex flex-col gap-4">
+      {hasProfitScheme && (
+        <div className="flex items-end justify-between gap-3 rounded-lg border bg-muted/20 px-4 py-3">
+          <div className="flex flex-col gap-1">
+            <p className="text-xs font-semibold text-muted-foreground">Distribution per share</p>
+            <p className="text-[11px] text-muted-foreground">
+              Set a per-share amount and every investor&apos;s distribution updates as <span className="font-medium">shares × per-share</span>.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Input
+              type="number" min="0" step="0.0001" placeholder="0.00"
+              className="w-40 h-8 text-right text-sm"
+              value={perShareAmount}
+              onChange={(e) => applyPerShare(e.target.value)}
+            />
+            <Button
+              type="button" size="sm" variant="ghost"
+              onClick={() => { setPerShareAmount(""); setAmounts({}) }}
+              disabled={!perShareAmount && Object.keys(amounts).length === 0}
+            >
+              Clear
+            </Button>
+          </div>
+        </div>
+      )}
       <div className="rounded-xl border overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-muted/30 border-b">
@@ -2835,15 +2911,21 @@ function OpenPeriodStep({
   const grossNav = lastClosedPeriod?.nav_gross_end ?? lastClosedPeriod?.nav_end ?? null
   const aumEnd = lastClosedPeriod?.total_aum_end ?? (sharesEnd != null && grossNav != null ? sharesEnd * grossNav : null)
 
-  const pendingSubs = pendingMutations.filter((m) => m.type === "subscription")
+  // Share transfers create paired subscription/redemption mutations on buyer/seller —
+  // they're decoupled from periods and shouldn't surface as pending subs/reds.
+  const isTransferMutation = (m: FundMutation): boolean =>
+    typeof m.notes === "string" && /^transfer (to|from)/i.test(m.notes)
+  const pendingSubs = pendingMutations.filter((m) => m.type === "subscription" && !isTransferMutation(m))
   const totalDistributed = Object.values(existingDistributions).reduce((s, v) => s + v.amount, 0)
   const totalRedeemedShares = existingRedemptions.reduce((s, r) => s + r.sharesRedeemed, 0)
   const totalRedeemedAmount = existingRedemptions.reduce((s, r) => s + r.amount, 0)
   const totalSubShares = pendingSubs.reduce((s, m) => s + (m.shares_issued ?? 0), 0)
   const totalSubAmount = pendingSubs.reduce((s, m) => s + (m.amount_for_shares ?? 0), 0)
 
-  const newShares = sharesEnd != null ? sharesEnd - totalRedeemedShares + totalSubShares : null
-  const newAum = aumEnd != null ? aumEnd - totalDistributed - accruedFeesTotal - totalRedeemedAmount + totalSubAmount : null
+  // When there's no prior period yet, the opening position is just the running
+  // delta from this period's mutations (subs − reds; AUM nets dists and fees too).
+  const newShares = (sharesEnd ?? 0) - totalRedeemedShares + totalSubShares
+  const newAum = (aumEnd ?? 0) - totalDistributed - accruedFeesTotal - totalRedeemedAmount + totalSubAmount
 
   const rows: Array<{ label: string; shares: number | null; amount: number | null; color?: string }> = [
     { label: `End of ${lastClosedPeriod?.label ?? "last period"}`, shares: sharesEnd, amount: aumEnd },
@@ -2934,6 +3016,25 @@ function MutationWorkflow({
   onOpenPeriod: () => void
 }) {
   const scMap = React.useMemo(() => new Map(shareClasses.map((sc) => [sc.id, sc])), [shareClasses])
+  // Currency id → ISO code, for displaying per-entry amounts in their investment currency.
+  const [currencyMap, setCurrencyMap] = React.useState<Map<number, string>>(new Map())
+  React.useEffect(() => {
+    fetch("/api/currencies")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: Array<{ id: number; code?: string | null }>) => {
+        const m = new Map<number, string>()
+        for (const c of list) if (c.code) m.set(c.id, c.code.toUpperCase())
+        setCurrencyMap(m)
+      })
+      .catch(() => {})
+  }, [])
+  const codeForEntry = React.useCallback(
+    (entry: CapTableEntry): string => {
+      const ccy = (entry as { currency?: number | null }).currency
+      return (ccy != null && currencyMap.get(ccy)) || currencyCode || "EUR"
+    },
+    [currencyMap, currencyCode],
+  )
   const [activeStep, setActiveStep] = React.useState<1 | 2 | 3 | 4>(1)
   const [step1Done, setStep1Done] = React.useState(false)
   const [step2Done, setStep2Done] = React.useState(false)
@@ -3020,7 +3121,11 @@ function MutationWorkflow({
     }
   }, [existingDistributions, positions])
 
-  const pendingSubs = pendingMutations.filter((m) => m.type === "subscription")
+  // Exclude share transfers (paired subscription/redemption mutations) from
+  // the Subscriptions tab — they're decoupled from periods.
+  const pendingSubs = pendingMutations.filter(
+    (m) => m.type === "subscription" && !(typeof m.notes === "string" && /^transfer (to|from)/i.test(m.notes)),
+  )
 
   if (capTableEntries.length === 0) {
     return (
@@ -3141,7 +3246,7 @@ function MutationWorkflow({
                           </td>
                           <td className="py-2.5 px-3 text-muted-foreground">{scName}</td>
                           <td className="py-2.5 px-3 text-muted-foreground">{fmtDate(call.received_at)}</td>
-                          <td className="py-2.5 px-3 text-right tabular-nums font-medium">{fmtCcy(call.amount, currencyCode)}</td>
+                          <td className="py-2.5 px-3 text-right tabular-nums font-medium">{fmtCcy(call.amount, codeForEntry(entry))}</td>
                           <td className="py-2.5 px-4 text-right">
                             <Button size="sm" variant="outline" onClick={() => setDeployCall({ call, entry })}>
                               Subscribe
