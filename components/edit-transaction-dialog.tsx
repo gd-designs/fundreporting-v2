@@ -83,7 +83,47 @@ export function EditTransactionDialog({
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [deletingLegId, setDeletingLegId] = React.useState<string | null>(null)
+  // Local edits to existing legs — keyed by leg.id. Only changed fields are PATCHed.
+  type LegEdit = {
+    entryType: string
+    assetId: string
+    direction: "in" | "out"
+    amount: string
+    source: string
+    sourceId: string
+  }
+  const [legEdits, setLegEdits] = React.useState<Record<string, LegEdit>>({})
   const nextKey = React.useRef(1)
+
+  function legCurrent(leg: TransactionLeg): LegEdit {
+    return legEdits[leg.id] ?? {
+      entryType: leg.entryType,
+      assetId: leg.assetId,
+      direction: leg.direction,
+      amount: String(leg.amount),
+      source: leg.source ?? "",
+      sourceId: leg.sourceId ?? "",
+    }
+  }
+  function updateLeg(legId: string, field: keyof LegEdit, value: string) {
+    setLegEdits((prev) => {
+      const base = prev[legId] ?? legCurrent(transaction!.legs.find((l) => l.id === legId)!)
+      return { ...prev, [legId]: { ...base, [field]: value } }
+    })
+  }
+  function diffPatch(leg: TransactionLeg): Record<string, unknown> | null {
+    const e = legEdits[leg.id]
+    if (!e) return null
+    const patch: Record<string, unknown> = {}
+    if (e.entryType !== leg.entryType) patch.entry_type = e.entryType
+    if (e.assetId !== leg.assetId) patch.object_id = e.assetId
+    if (e.direction !== leg.direction) patch.direction = e.direction
+    const amt = parseFloat(e.amount)
+    if (Number.isFinite(amt) && amt !== leg.amount) patch.amount = amt
+    if ((e.source || null) !== leg.source) patch.source = e.source || null
+    if ((e.sourceId || null) !== leg.sourceId) patch.source_id = e.sourceId || null
+    return Object.keys(patch).length > 0 ? patch : null
+  }
 
   React.useEffect(() => {
     if (open && transaction) {
@@ -92,6 +132,7 @@ export function EditTransactionDialog({
       setDate(transaction.date ? new Date(transaction.date) : new Date())
       setNotes(transaction.notes ?? "")
       setNewEntries([])
+      setLegEdits({})
       nextKey.current = 1
       setError(null)
       // Load assets + transaction types for dropdowns
@@ -129,7 +170,21 @@ export function EditTransactionDialog({
         }),
       })
 
-      // 2. Create new entries
+      // 2. PATCH any existing legs that the user edited
+      await Promise.all(
+        transaction.legs
+          .map((leg) => ({ leg, patch: diffPatch(leg) }))
+          .filter(({ patch }) => patch != null)
+          .map(({ leg, patch }) =>
+            fetch(`/api/transaction-entries/${leg.id}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(patch),
+            }),
+          ),
+      )
+
+      // 3. Create new entries
       const validNew = newEntries.filter((e) => e.assetId && parseFloat(e.amount) > 0)
       await Promise.all(
         validNew.map((e) => {
@@ -222,39 +277,78 @@ export function EditTransactionDialog({
             />
           </div>
 
-          {/* Existing entries */}
+          {/* Existing entries — editable */}
           <div className="space-y-2">
             <Label className="text-xs uppercase tracking-wide text-muted-foreground">Existing entries</Label>
             <div className="rounded-lg border divide-y">
               {transaction.legs.length === 0 && (
                 <div className="px-3 py-4 text-sm text-muted-foreground text-center">No entries</div>
               )}
-              {transaction.legs.map((leg) => (
-                <div key={leg.id} className="flex items-center gap-2 px-3 py-2 text-sm">
-                  <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${leg.direction === "in" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}>
-                    {leg.direction}
-                  </span>
-                  <span className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground uppercase">
-                    {leg.entryType}
-                  </span>
-                  <span className="truncate flex-1">{leg.assetName || "—"}</span>
-                  <span className={`tabular-nums font-medium shrink-0 ${leg.direction === "in" ? "text-emerald-600" : "text-red-500"}`}>
-                    {leg.direction === "in" ? "+" : "−"}{leg.amount.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </span>
-                  {leg.source && (
-                    <span className="text-[10px] text-muted-foreground">{leg.source}</span>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="size-6 shrink-0 text-muted-foreground hover:text-destructive"
-                    disabled={deletingLegId === leg.id}
-                    onClick={() => deleteLeg(leg.id)}
-                  >
-                    {deletingLegId === leg.id ? <Spinner className="size-3" /> : <Trash2 className="size-3" />}
-                  </Button>
-                </div>
-              ))}
+              {transaction.legs.map((leg, idx) => {
+                const cur = legCurrent(leg)
+                return (
+                  <div key={leg.id} className="p-3 space-y-2">
+                    <div className="flex items-start gap-2">
+                      <span className="text-xs text-muted-foreground mt-2 w-4 shrink-0">{idx + 1}</span>
+                      <div className="grid grid-cols-5 gap-2 flex-1">
+                        <Select value={cur.entryType} onValueChange={(v) => updateLeg(leg.id, "entryType", v)}>
+                          <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {ENTRY_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+
+                        <Select value={cur.assetId} onValueChange={(v) => updateLeg(leg.id, "assetId", v)}>
+                          <SelectTrigger className="h-8 text-xs col-span-2"><SelectValue placeholder="Asset…" /></SelectTrigger>
+                          <SelectContent>
+                            {assets.map((a) => <SelectItem key={a.id} value={a.id}>{a.name}{a.currencyCode ? ` (${a.currencyCode})` : ""}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+
+                        <Select value={cur.direction} onValueChange={(v) => updateLeg(leg.id, "direction", v)}>
+                          <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="in">In</SelectItem>
+                            <SelectItem value="out">Out</SelectItem>
+                          </SelectContent>
+                        </Select>
+
+                        <Input
+                          type="number" min="0" step="0.01" placeholder="Amount" className="h-8 text-xs"
+                          value={cur.amount}
+                          onChange={(e) => updateLeg(leg.id, "amount", e.target.value)}
+                        />
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-8 shrink-0 text-muted-foreground hover:text-destructive"
+                        disabled={deletingLegId === leg.id}
+                        onClick={() => deleteLeg(leg.id)}
+                      >
+                        {deletingLegId === leg.id ? <Spinner className="size-3" /> : <Trash2 className="size-3" />}
+                      </Button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 ml-6">
+                      <Select value={cur.source || "__none__"} onValueChange={(v) => updateLeg(leg.id, "source", v === "__none__" ? "" : v)}>
+                        <SelectTrigger className="h-7 text-[11px] text-muted-foreground"><SelectValue placeholder="Source…" /></SelectTrigger>
+                        <SelectContent>
+                          {SOURCE_TYPES.map((s) => <SelectItem key={s.value || "__none__"} value={s.value || "__none__"}>{s.label}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      {cur.source && cur.source !== "new_money_in" && (
+                        <Select value={cur.sourceId || "__none__"} onValueChange={(v) => updateLeg(leg.id, "sourceId", v === "__none__" ? "" : v)}>
+                          <SelectTrigger className="h-7 text-[11px] text-muted-foreground"><SelectValue placeholder="Source asset…" /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none__">None</SelectItem>
+                            {assets.map((a) => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           </div>
 
