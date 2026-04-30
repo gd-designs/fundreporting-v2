@@ -64,14 +64,14 @@ export function ShareTransferDeclareDialog({
   onSuccess: () => void
 }) {
   const scMap = React.useMemo(() => new Map(shareClasses.map((sc) => [sc.id, sc])), [shareClasses])
-  const nav = sellerEntry.share_class ? scMap.get(sellerEntry.share_class)?.current_nav ?? 0 : 0
+  const currentClassNav = sellerEntry.share_class ? scMap.get(sellerEntry.share_class)?.current_nav ?? 0 : 0
 
+  // All three values are user-controlled and saved as-is to share_transfer.
+  // Pre-fill: shares = full position, NAV = current class NAV, amount = shares × NAV.
   const [recipientId, setRecipientId] = React.useState("")
   const [sharesToTransfer, setSharesToTransfer] = React.useState(String(sellerAvailableShares))
-  const [transferAmount, setTransferAmount] = React.useState(nav > 0 ? (sellerAvailableShares * nav).toFixed(2) : "")
-  // Once the user manually edits the amount, stop auto-syncing it from shares.
-  // This is what allows discounts/premiums (price ≠ shares × NAV).
-  const [amountTouched, setAmountTouched] = React.useState(false)
+  const [agreedNav, setAgreedNav] = React.useState(currentClassNav > 0 ? currentClassNav.toFixed(4) : "")
+  const [transferAmount, setTransferAmount] = React.useState(currentClassNav > 0 ? (sellerAvailableShares * currentClassNav).toFixed(2) : "")
   const [date, setDate] = React.useState<Date | undefined>(new Date())
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -80,19 +80,19 @@ export function ShareTransferDeclareDialog({
     if (open) {
       setRecipientId("")
       setSharesToTransfer(String(sellerAvailableShares))
-      setTransferAmount(nav > 0 ? (sellerAvailableShares * nav).toFixed(2) : "")
-      setAmountTouched(false)
+      setAgreedNav(currentClassNav > 0 ? currentClassNav.toFixed(4) : "")
+      setTransferAmount(currentClassNav > 0 ? (sellerAvailableShares * currentClassNav).toFixed(2) : "")
       setDate(new Date())
       setError(null)
     }
-  }, [open, sellerAvailableShares, nav])
+  }, [open, sellerAvailableShares, currentClassNav])
 
   const shares = sharesToTransfer ? Number(sharesToTransfer) : 0
   const amount = transferAmount ? Number(transferAmount) : 0
-  const impliedNav = shares > 0 ? amount / shares : 0
-  // Use an epsilon to avoid floating-point red on visually-equal prices.
-  const navDiff = impliedNav - nav
-  const navDiffNoticeable = nav > 0 && Math.abs(navDiff) >= 0.01
+  const navValue = agreedNav ? Number(agreedNav) : 0
+  // Premium / discount vs the live class NAV (informational, not enforced).
+  const navDiff = navValue - currentClassNav
+  const navDiffNoticeable = currentClassNav > 0 && Math.abs(navDiff) >= 0.01
 
   async function handleDeclare() {
     if (!recipientId) { setError("Select a recipient."); return }
@@ -112,7 +112,7 @@ export function ShareTransferDeclareDialog({
           buyer_cap_table_entry: recipientId,
           shares,
           amount,
-          nav_per_share: impliedNav,
+          nav_per_share: navValue,
           transferred_at: transferTs,
           status: "pending",
           notes: `${sellerShareholder.name ?? "Seller"} → ${recipients.find((r) => r.entryId === recipientId)?.name ?? "buyer"}`,
@@ -164,10 +164,10 @@ export function ShareTransferDeclareDialog({
               <span className="text-muted-foreground">Available shares</span>
               <span className="font-medium">{fmt(sellerAvailableShares, 4)}</span>
             </div>
-            {nav > 0 && (
+            {currentClassNav > 0 && (
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Current NAV / share</span>
-                <span className="font-medium">{fmtCcy(nav, currencyCode)}</span>
+                <span className="text-muted-foreground">Current class NAV / share</span>
+                <span className="font-medium">{fmtCcy(currentClassNav, currencyCode)}</span>
               </div>
             )}
           </div>
@@ -184,64 +184,47 @@ export function ShareTransferDeclareDialog({
               </SelectContent>
             </Select>
           </Field>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <Field>
-              <FieldLabel htmlFor="st-shares">Shares to transfer</FieldLabel>
+              <FieldLabel htmlFor="st-shares">Shares</FieldLabel>
               <Input
                 id="st-shares" type="number" min="0" max={sellerAvailableShares} step="0.0001"
                 value={sharesToTransfer}
-                onChange={(e) => {
-                  const raw = e.target.value
-                  setSharesToTransfer(raw)
-                  // Only auto-sync amount if the user hasn't manually overridden it.
-                  if (amountTouched) return
-                  const s = Number(raw)
-                  setTransferAmount(raw === "" || !Number.isFinite(s) || s <= 0 || nav <= 0 ? "" : (s * nav).toFixed(2))
-                }}
+                onChange={(e) => setSharesToTransfer(e.target.value)}
               />
             </Field>
             <Field>
-              <FieldLabel htmlFor="st-amount">Transfer amount ({currencyCode})</FieldLabel>
+              <FieldLabel htmlFor="st-nav">Agreed NAV / share</FieldLabel>
+              <Input
+                id="st-nav" type="number" min="0" step="0.0001"
+                value={agreedNav}
+                onChange={(e) => setAgreedNav(e.target.value)}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="st-amount">Amount paid ({currencyCode})</FieldLabel>
               <Input
                 id="st-amount" type="number" min="0" step="0.01"
                 value={transferAmount}
-                onChange={(e) => {
-                  // User editing amount → free-form. Stop syncing from shares.
-                  setTransferAmount(e.target.value)
-                  setAmountTouched(true)
-                }}
+                onChange={(e) => setTransferAmount(e.target.value)}
               />
-              {amountTouched && (
-                <button
-                  type="button"
-                  className="text-[10px] text-muted-foreground hover:text-foreground underline underline-offset-2 self-end"
-                  onClick={() => {
-                    setAmountTouched(false)
-                    setTransferAmount(nav > 0 && shares > 0 ? (shares * nav).toFixed(2) : "")
-                  }}
-                >
-                  Reset to NAV
-                </button>
-              )}
             </Field>
           </div>
-          {shares > 0 && nav > 0 && (
-            <div className="rounded-lg border p-3 bg-muted/30 text-sm flex flex-col gap-1">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Implied price / share</span>
-                <span className="font-medium tabular-nums">{fmtCcy(impliedNav, currencyCode)}</span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">vs. current NAV / share</span>
-                <span className={!navDiffNoticeable ? "text-muted-foreground" : navDiff > 0 ? "text-emerald-600" : "text-red-600"}>
-                  {fmtCcy(nav, currencyCode)}
-                  {navDiffNoticeable && (
-                    <> ({navDiff > 0 ? "+" : ""}{((navDiff / nav) * 100).toFixed(2)}%)</>
-                  )}
+          {currentClassNav > 0 && navValue > 0 && (() => {
+            const pct = (navDiff / currentClassNav) * 100
+            const label = !navDiffNoticeable ? "At NAV" : navDiff > 0 ? "Premium" : "Discount"
+            const colorClass = !navDiffNoticeable ? "text-muted-foreground" : navDiff > 0 ? "text-emerald-600" : "text-red-600"
+            return (
+              <div className="rounded-lg border p-3 bg-muted/30 flex justify-between text-xs">
+                <span className="text-muted-foreground">{label} vs. current NAV</span>
+                <span className={colorClass}>
+                  {navDiffNoticeable
+                    ? <>{navDiff > 0 ? "+" : "−"}{fmtCcy(Math.abs(navDiff), currencyCode)} / share ({navDiff > 0 ? "+" : ""}{pct.toFixed(2)}%)</>
+                    : "—"}
                 </span>
               </div>
-            </div>
-          )}
+            )
+          })()}
           <DatePickerInput id="st-date" label="Transfer date" value={date} onChange={setDate} />
           {error && <FieldError>{error}</FieldError>}
         </div>

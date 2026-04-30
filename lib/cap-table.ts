@@ -39,7 +39,7 @@ export type ShareClassDistribution = {
   share_class?: string | null
   entity?: string | null
   name?: string | null
-  basis?: "nav" | "committed_capital" | "fixed" | null
+  basis?: "nav" | "committed_capital" | "profit" | "fixed" | null
   rate?: number | null
   fixed_amount?: number | null
   frequency?: "monthly" | "quarterly" | "bi-annually" | "annually" | "on_close" | null

@@ -160,8 +160,12 @@ export function AddFundInvestorDialog({
       .then((list: CompanyOption[]) => {
         setCompanies(list)
         // Auto-select if only one company
-        if (list.length === 1) setSelectedCompanyEntityId(list[0].entityId)
-        else setSelectedCompanyEntityId("")
+        if (list.length === 1) {
+          setSelectedCompanyEntityId(list[0].entityId)
+          if (list[0].name) setName(list[0].name)
+        } else {
+          setSelectedCompanyEntityId("")
+        }
       })
       .catch(() => setCompanies([]))
       .finally(() => setCompaniesLoading(false))
@@ -185,7 +189,17 @@ export function AddFundInvestorDialog({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!name.trim()) { setError("Investor name is required."); return }
+    // For company investors selected from the dropdown, fall back to that
+    // company's name when the input is blank (auto-select path may not propagate it).
+    let effectiveName = name.trim()
+    if (!effectiveName && type === "company" && selectedCompanyEntityId && selectedCompanyEntityId !== "__new__") {
+      const picked = companies.find((c) => c.entityId === selectedCompanyEntityId)
+      if (picked?.name) {
+        effectiveName = picked.name
+        setName(picked.name)
+      }
+    }
+    if (!effectiveName) { setError("Investor name is required."); return }
     setSaving(true)
     setError(null)
 
@@ -204,7 +218,7 @@ export function AddFundInvestorDialog({
             receivingFundId: fundId,
             investingFundId: selectedFundId,
             investingFundEntityUUID: investingFund.entity,
-            name: name.trim(),
+            name: effectiveName,
             currencyId: currencyId ?? undefined,
             shareClassId: shareClassId || undefined,
             shareClassFeeId: entryFee?.id || undefined,
@@ -237,7 +251,7 @@ export function AddFundInvestorDialog({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             email: email.trim() || undefined,
-            name: name.trim(),
+            name: effectiveName,
             ...(type === "company" && selectedCompanyEntityId && selectedCompanyEntityId !== "__new__" ? { companyEntityUUID: selectedCompanyEntityId } : {}),
             type,
             fundEntityUUID,
@@ -271,7 +285,7 @@ export function AddFundInvestorDialog({
         const r = await fetch("/api/cap-table-shareholders", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ entity: amEntityUUID, name: name.trim(), email: email.trim() || null, type, role: "investor" }),
+          body: JSON.stringify({ entity: amEntityUUID, name: effectiveName, email: email.trim() || null, type, role: "investor" }),
         })
         if (!r.ok) throw new Error("Failed to create investor in asset manager")
         const d: { id: string } = await r.json()
@@ -282,7 +296,7 @@ export function AddFundInvestorDialog({
       const fundShRes = await fetch("/api/cap-table-shareholders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ entity: fundEntityUUID, name: name.trim(), email: email.trim() || null, type, role: "investor" }),
+        body: JSON.stringify({ entity: fundEntityUUID, name: effectiveName, email: email.trim() || null, type, role: "investor" }),
       })
       if (!fundShRes.ok) throw new Error("Failed to create investor in fund")
       const fundSh: { id: string } = await fundShRes.json()
@@ -646,7 +660,7 @@ export function AddFundInvestorDialog({
 
           <DialogFooter className="mt-5">
             <Button type="button" variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
-            <Button type="submit" disabled={saving || !name.trim()}>
+            <Button type="submit" disabled={saving}>
               {saving ? <Spinner className="size-4 mr-2" /> : null}
               Add investor
             </Button>

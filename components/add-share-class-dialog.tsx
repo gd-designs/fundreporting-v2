@@ -34,7 +34,7 @@ import {
 type DistRow = {
   _key: string
   name: string
-  basis: "nav" | "committed_capital" | "fixed"
+  basis: "nav" | "committed_capital" | "profit" | "fixed"
   rate: string
   fixedAmount: string
   frequency: "monthly" | "quarterly" | "bi-annually" | "annually" | "on_close"
@@ -47,6 +47,7 @@ function emptyDist(): DistRow {
 const DIST_BASIS_LABELS: Record<string, string> = {
   nav: "% of NAV",
   committed_capital: "% of committed",
+  profit: "% of profit",
   fixed: "Fixed/share",
 }
 
@@ -318,6 +319,7 @@ export function AddShareClassDialog({
                     <SelectContent>
                       <SelectItem value="nav">% of current value (NAV)</SelectItem>
                       <SelectItem value="committed_capital">% of total investment</SelectItem>
+                      <SelectItem value="profit">% of profit</SelectItem>
                       <SelectItem value="fixed">Fixed amount per share</SelectItem>
                     </SelectContent>
                   </Select>

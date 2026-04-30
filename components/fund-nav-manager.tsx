@@ -62,6 +62,8 @@ type FundPeriod = {
   yield_gross?: number | null
   management_fee_per_share?: number | null
   management_fee_total?: number | null
+  performance_fee_per_share?: number | null
+  performance_fee_total?: number | null
   pnl_costs?: number | null           // costs carried from PREVIOUS period
   notes?: string | null
 }
@@ -645,18 +647,48 @@ function OpenPeriodDialog({
   periodFrequency?: string | null
   onSuccess: () => void
 }) {
+  // Share transfers create paired subscription/redemption mutations on the buyer/seller —
+  // these are NOT period activity (they're decoupled from periods entirely), so exclude
+  // them from the opening summary. Identified by notes prefix.
+  const isTransferMutation = (m: FundMutation): boolean =>
+    typeof m.notes === "string" && /^transfer (to|from)/i.test(m.notes)
+
+  // Fund fees still accrued (unpaid) reduce the fund's remaining cash even though
+  // the cap table count is unaffected. Pull them so we can show + subtract.
+  const [accruedFeesTotal, setAccruedFeesTotal] = React.useState(0)
+  React.useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    fetch(`/api/fund-fees?entity=${entityUUID}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: Array<{ status?: string | null; amount?: number | null }>) => {
+        if (cancelled) return
+        const accrued = list.filter((f) => f.status === "accrued")
+        const total = accrued.reduce((s, f) => s + (f.amount ?? 0), 0)
+        console.log(`[OpenPeriodDialog] fund-fees: ${list.length} total, ${accrued.length} accrued, sum=€${total.toFixed(2)}`)
+        setAccruedFeesTotal(total)
+      })
+      .catch(() => { if (!cancelled) setAccruedFeesTotal(0) })
+    return () => { cancelled = true }
+  }, [open, entityUUID])
+
   // Compute suggested opening values from mutations
-  const pendingSubs = pendingMutations.filter((m) => m.type === "subscription")
+  const pendingSubs = pendingMutations.filter((m) => m.type === "subscription" && !isTransferMutation(m))
+  const pendingReds = pendingMutations.filter((m) => m.type === "redemption" && !isTransferMutation(m))
   const newSharesIssued = pendingSubs.reduce((s, m) => s + (m.shares_issued ?? 0), 0)
-  const redeemedShares = pendingMutations.filter((m) => m.type === "redemption").reduce((s, m) => s + (m.shares_redeemed ?? 0), 0)
+  const redeemedShares = pendingReds.reduce((s, m) => s + (m.shares_redeemed ?? 0), 0)
   const subsAum = pendingSubs.reduce((s, m) => s + (m.amount_for_shares ?? 0), 0)
-  const redemptionsAum = pendingMutations.filter((m) => m.type === "redemption").reduce((s, m) => s + (m.amount_returned ?? 0), 0)
+  const redemptionsAum = pendingReds.reduce((s, m) => s + (m.amount_returned ?? 0), 0)
   const distributionsAum = pendingMutations.filter((m) => m.type === "distribution").reduce((s, m) => s + (m.amount_distributed ?? 0), 0)
   const suggestedNav = pendingSubs[0]?.nav_per_share ?? previousPeriod?.nav_gross_end ?? previousPeriod?.nav_end ?? null
   const suggestedShares = (previousPeriod?.total_shares_end ?? 0) + newSharesIssued - redeemedShares
   const prevAum = previousPeriod?.total_aum_end ?? ((previousPeriod?.total_shares_end != null && previousPeriod?.nav_end != null) ? (previousPeriod.total_shares_end * previousPeriod.nav_end) : 0)
-  // AUM = NAV per share × total shares (never add/subtract AUM components)
-  const suggestedAum = suggestedNav != null && suggestedShares > 0 ? suggestedNav * suggestedShares : 0
+  // Opening AUM = end-of-period AUM − distributions paid − fees accrued + new subs − redemptions.
+  // Mirrors the breakdown rows shown above: each line reduces / increases the running total.
+  const suggestedAum = Math.max(
+    0,
+    prevAum - distributionsAum - accruedFeesTotal - redemptionsAum + subsAum,
+  )
 
   // Suggested opening date = last period close + 1 day
   const suggestedOpenDate = React.useMemo(() => {
@@ -666,11 +698,6 @@ function OpenPeriodDialog({
 
   const [label, setLabel] = React.useState("")
   const [openedAt, setOpenedAt] = React.useState<Date | undefined>(suggestedOpenDate)
-  const [navStart, setNavStart] = React.useState(suggestedNav != null ? String(suggestedNav) : "")
-  const [sharesStart, setSharesStart] = React.useState(String(suggestedShares.toFixed(4)))
-  // AUM is always derived: nav × shares
-  const computedAum = (parseFloat(navStart) || 0) * (parseFloat(sharesStart) || 0)
-  const aumStart = computedAum > 0 ? computedAum.toFixed(2) : ""
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
@@ -678,8 +705,6 @@ function OpenPeriodDialog({
     if (open) {
       setLabel("")
       setOpenedAt(suggestedOpenDate)
-      setNavStart(suggestedNav != null ? String(suggestedNav) : "")
-      setSharesStart(String(suggestedShares.toFixed(4)))
       setError(null)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -691,10 +716,11 @@ function OpenPeriodDialog({
   const prevAumDisplay = previousPeriod?.total_aum_end ?? (prevShares && prevGrossNav ? prevShares * prevGrossNav : 0)
   const summaryRows = [
     previousPeriod ? { label: `End of ${previousPeriod.label ?? "last period"}`, shares: prevShares || null, aum: prevAumDisplay || null } : null,
-    distributionsAum > 0 ? { label: "Distributions paid", shares: null, aum: -distributionsAum } : null,
+    distributionsAum > 0 ? { label: "Distributions paid", shares: null, aum: -distributionsAum, color: "text-amber-600" } : null,
+    accruedFeesTotal > 0 ? { label: "Fees accrued", shares: null, aum: -accruedFeesTotal, color: "text-amber-600" } : null,
     redeemedShares > 0 ? { label: "Redemptions", shares: -redeemedShares, aum: redeemedShares && prevGrossNav ? -(redeemedShares * prevGrossNav) : -redemptionsAum } : null,
     newSharesIssued > 0 ? { label: "New subscriptions", shares: newSharesIssued, aum: subsAum } : null,
-  ].filter(Boolean) as Array<{ label: string; shares: number | null; aum: number | null }>
+  ].filter(Boolean) as Array<{ label: string; shares: number | null; aum: number | null; color?: string }>
 
   async function handleOpen() {
     setSaving(true); setError(null)
@@ -707,9 +733,9 @@ function OpenPeriodDialog({
           status: "open",
           label: label || null,
           opened_at: openedAt ? openedAt.getTime() : Date.now(),
-          ...(navStart ? { nav_start: Number(navStart) } : {}),
-          total_shares_start: sharesStart ? Number(sharesStart) : 0,
-          ...(aumStart ? { total_aum_start: Number(aumStart) } : {}),
+          ...(suggestedNav != null ? { nav_start: suggestedNav } : {}),
+          total_shares_start: suggestedShares,
+          ...(suggestedAum > 0 ? { total_aum_start: suggestedAum } : {}),
         }),
       })
       if (!res.ok) throw new Error("Failed to open period")
@@ -754,7 +780,7 @@ function OpenPeriodDialog({
                   {summaryRows.map((row, i) => {
                     const negative = (row.shares ?? 0) < 0 || (row.aum ?? 0) < 0
                     const positive = (row.shares ?? 0) > 0 || ((row.aum ?? 0) > 0 && i > 0)
-                    const color = negative ? "text-red-600" : positive ? "text-emerald-600" : ""
+                    const color = row.color ?? (negative ? "text-red-600" : positive ? "text-emerald-600" : "")
                     return (
                       <tr key={i} className="border-b last:border-0">
                         <td className={`py-1.5 px-3 ${color}`}>{row.label}</td>
@@ -778,26 +804,6 @@ function OpenPeriodDialog({
               </table>
             </div>
           )}
-
-          {/* Confirm / override opening values */}
-          <div className="grid grid-cols-3 gap-3">
-            <Field>
-              <FieldLabel htmlFor="op-nav">NAV per share</FieldLabel>
-              <Input id="op-nav" type="number" min="0" step="0.0001" placeholder="0.0000"
-                value={navStart} onChange={(e) => setNavStart(e.target.value)} />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="op-shares">Total shares</FieldLabel>
-              <Input id="op-shares" type="number" min="0" step="0.0001" placeholder="0.0000"
-                value={sharesStart} onChange={(e) => setSharesStart(e.target.value)} />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor="op-aum">AUM start</FieldLabel>
-              <Input id="op-aum" type="number" min="0" step="0.01" placeholder="0.00"
-                value={aumStart} readOnly className="bg-muted/50" />
-              <p className="text-[11px] text-muted-foreground mt-0.5">NAV × shares</p>
-            </Field>
-          </div>
 
           <div className="grid grid-cols-2 gap-3">
             <Field>
@@ -1008,13 +1014,13 @@ function OpenPeriodSnapshot({
 
         let totalInvested = 0
         for (const a of assets) {
-          if (a.investable === "investable_cash") continue
           const liveStake = stakeValues.get(a.id)
           if (liveStake != null) {
             totalInvested += liveStake
           } else if (a.investable === "equity_stake" && a.stakeValue != null && a.stakeValue > 0) {
             totalInvested += a.stakeValue
           } else {
+            // Includes cash, deposits, and any other ledger-tracked assets.
             const bal = balanceByAsset.get(a.id) ?? 0
             if (bal > 0) totalInvested += bal
           }
@@ -1029,9 +1035,13 @@ function OpenPeriodSnapshot({
     ).catch(() => setStatsLoading(false))
   }, [entityUUID])
 
-  // Step A: Mutations in this period
-  const subscriptions = mutations.filter((m) => m.type === "subscription")
-  const redemptions = mutations.filter((m) => m.type === "redemption")
+  // Step A: Mutations in this period.
+  // Share transfers create paired subscription/redemption mutations on buyer/seller.
+  // Transfers are decoupled from periods, so exclude them from this period's roll-up.
+  const isTransferMutation = (m: FundMutation): boolean =>
+    typeof m.notes === "string" && /^transfer (to|from)/i.test(m.notes)
+  const subscriptions = mutations.filter((m) => m.type === "subscription" && !isTransferMutation(m))
+  const redemptions = mutations.filter((m) => m.type === "redemption" && !isTransferMutation(m))
   const distributions = mutations.filter((m) => m.type === "distribution")
   const totalSubsIn = subscriptions.reduce((s, m) => s + (m.amount_for_shares ?? 0), 0)
   const totalRedOut = redemptions.reduce((s, m) => s + (m.amount_returned ?? 0), 0)
@@ -1084,9 +1094,31 @@ function OpenPeriodSnapshot({
       }, 0)
     : null
   const mgmtFeePerShare = mgmtFeeTotal != null && currentShares > 0 ? mgmtFeeTotal / currentShares : null
-  // Step C tentative net (using calculated fee preview)
-  const tentativeNetAum = grossAum != null ? grossAum - (mgmtFeeTotal ?? 0) : null
+
+  // Performance fees: % of period profit (only positive growth — no high-water mark yet).
+  // Profit = (gross NAV/share - opening NAV/share) × current shares.
   const grossNavPerShare = grossAum != null && currentShares > 0 ? grossAum / currentShares : null
+  const periodProfit =
+    grossNavPerShare != null && lastNavPerShare != null && grossNavPerShare > lastNavPerShare
+      ? (grossNavPerShare - lastNavPerShare) * currentShares
+      : 0
+  const perfFeesRaw = shareClasses.flatMap((sc) =>
+    (sc._share_class_fee ?? []).filter((f) => f.type === "performance"),
+  )
+  const perfFees = Array.from(
+    new Map(perfFeesRaw.map((f) => [`${f.rate ?? ""}|${f.basis ?? ""}`, f])).values(),
+  )
+  const perfFeeTotal = perfFees.length > 0 && periodProfit > 0
+    ? perfFees.reduce((sum, f) => (f.rate != null ? sum + (f.rate / 100) * periodProfit : sum), 0)
+    : 0
+  const perfFeePerShare = perfFeeTotal > 0 && currentShares > 0 ? perfFeeTotal / currentShares : null
+  const perfFeeRate = perfFees.length > 0
+    ? perfFees.filter((f) => f.rate != null).map((f) => `${f.rate}% of profit`).join(", ")
+    : null
+
+  // Step C tentative net (using calculated fee preview)
+  const totalFeesTotal = (mgmtFeeTotal ?? 0) + perfFeeTotal
+  const tentativeNetAum = grossAum != null ? grossAum - totalFeesTotal : null
   const netNavPerShare = tentativeNetAum != null && currentShares > 0 ? tentativeNetAum / currentShares : null
   const grossYield = grossNavPerShare != null && lastNavPerShare != null && lastNavPerShare > 0
     ? (grossNavPerShare - lastNavPerShare) / lastNavPerShare : null
@@ -1191,18 +1223,38 @@ function OpenPeriodSnapshot({
                 </span>
               }
             />
-            <SnapRow
-              label={`Management fee/share${mgmtFeeRate ? ` (${mgmtFeeRate})` : ""}`}
-              value={mgmtFeePerShare != null && mgmtFeePerShare > 0
-                ? <span className="text-red-600">−{fmtCcy(mgmtFeePerShare, currencyCode)}</span>
-                : <span className="text-muted-foreground">—</span>}
-            />
-            <SnapRow
-              label="Management fee total"
-              value={mgmtFeeTotal != null && mgmtFeeTotal > 0
-                ? <span className="text-red-600">−{fmtCcy(mgmtFeeTotal, currencyCode)}</span>
-                : <span className="text-muted-foreground">—</span>}
-            />
+            {mgmtFees.length > 0 && (
+              <>
+                <SnapRow
+                  label={`Management fee/share${mgmtFeeRate ? ` (${mgmtFeeRate})` : ""}`}
+                  value={mgmtFeePerShare != null && mgmtFeePerShare > 0
+                    ? <span className="text-red-600">−{fmtCcy(mgmtFeePerShare, currencyCode)}</span>
+                    : <span className="text-muted-foreground">—</span>}
+                />
+                <SnapRow
+                  label="Management fee total"
+                  value={mgmtFeeTotal != null && mgmtFeeTotal > 0
+                    ? <span className="text-red-600">−{fmtCcy(mgmtFeeTotal, currencyCode)}</span>
+                    : <span className="text-muted-foreground">—</span>}
+                />
+              </>
+            )}
+            {perfFees.length > 0 && (
+              <>
+                <SnapRow
+                  label={`Performance fee/share${perfFeeRate ? ` (${perfFeeRate})` : ""}`}
+                  value={perfFeePerShare != null && perfFeePerShare > 0
+                    ? <span className="text-red-600">−{fmtCcy(perfFeePerShare, currencyCode)}</span>
+                    : <span className="text-muted-foreground">—</span>}
+                />
+                <SnapRow
+                  label="Performance fee total"
+                  value={perfFeeTotal > 0
+                    ? <span className="text-red-600">−{fmtCcy(perfFeeTotal, currencyCode)}</span>
+                    : <span className="text-muted-foreground">—</span>}
+                />
+              </>
+            )}
             <SnapRow
               label="Net NAV/share"
               value={
@@ -1238,6 +1290,11 @@ function OpenPeriodSnapshot({
           grossYield: grossYield ?? undefined,
           mgmtFeePerShare: mgmtFeePerShare ?? undefined,
           mgmtFeeTotal: mgmtFeeTotal ?? undefined,
+          perfFeePerShare: perfFeePerShare ?? undefined,
+          perfFeeTotal: perfFeeTotal > 0 ? perfFeeTotal : undefined,
+          perfFeeRate: perfFeeRate,
+          hasMgmtFees: mgmtFees.length > 0,
+          hasPerfFees: perfFees.length > 0,
           netNavPerShare: netNavPerShare ?? undefined,
           netYield: netYield ?? undefined,
           totalShares: currentShares,
@@ -1313,6 +1370,11 @@ function ClosePeriodDialog({
     grossYield?: number
     mgmtFeePerShare?: number
     mgmtFeeTotal?: number
+    perfFeePerShare?: number
+    perfFeeTotal?: number
+    perfFeeRate?: string | null
+    hasMgmtFees?: boolean
+    hasPerfFees?: boolean
     netNavPerShare?: number
     netYield?: number
     totalShares?: number
@@ -1339,6 +1401,8 @@ function ClosePeriodDialog({
   const [grossNav, setGrossNav] = React.useState(t.grossNavPerShare != null ? String(t.grossNavPerShare) : "")
   const [mgmtFeePerShareField, setMgmtFeePerShareField] = React.useState(t.mgmtFeePerShare != null ? String(t.mgmtFeePerShare) : "")
   const [mgmtFeeTotalField, setMgmtFeeTotalField] = React.useState(t.mgmtFeeTotal != null ? String(t.mgmtFeeTotal) : "")
+  const [perfFeePerShareField, setPerfFeePerShareField] = React.useState(t.perfFeePerShare != null ? String(t.perfFeePerShare) : "")
+  const [perfFeeTotalField, setPerfFeeTotalField] = React.useState(t.perfFeeTotal != null ? String(t.perfFeeTotal) : "")
   const [navEnd, setNavEnd] = React.useState(
     t.netNavPerShare != null ? String(t.netNavPerShare) : (period.nav_end != null ? String(period.nav_end) : "")
   )
@@ -1389,6 +1453,8 @@ function ClosePeriodDialog({
     if (t.grossNavPerShare != null) setGrossNav(String(t.grossNavPerShare))
     if (t.mgmtFeePerShare != null) setMgmtFeePerShareField(String(t.mgmtFeePerShare))
     if (t.mgmtFeeTotal != null) setMgmtFeeTotalField(String(t.mgmtFeeTotal))
+    if (t.perfFeePerShare != null) setPerfFeePerShareField(String(t.perfFeePerShare))
+    if (t.perfFeeTotal != null) setPerfFeeTotalField(String(t.perfFeeTotal))
     if (t.netNavPerShare != null) setNavEnd(String(t.netNavPerShare))
     // Pre-fill financial balances from tentative snapshot (live computed values)
     if (t.assetsValue != null) setTotalInvestedAssets(String(t.assetsValue))
@@ -1411,9 +1477,10 @@ function ClosePeriodDialog({
     if (totalAumEnd != null && sharesEndNum != null && sharesEndNum > 0) {
       const derived = totalAumEnd / sharesEndNum
       setGrossNav(String(derived.toFixed(4)))
-      // Derive net NAV = grossNav - mgmtFeePerShare
-      const feePs = mgmtFeePerShareField ? Number(mgmtFeePerShareField) : (t.mgmtFeePerShare ?? 0)
-      setNavEnd(String((derived - feePs).toFixed(4)))
+      // Derive net NAV = grossNav − management fee/share − performance fee/share
+      const mgmtPs = mgmtFeePerShareField ? Number(mgmtFeePerShareField) : (t.mgmtFeePerShare ?? 0)
+      const perfPs = perfFeePerShareField ? Number(perfFeePerShareField) : (t.perfFeePerShare ?? 0)
+      setNavEnd(String((derived - mgmtPs - perfPs).toFixed(4)))
     }
     setStep(2)
   }
@@ -1443,6 +1510,8 @@ function ClosePeriodDialog({
           ...(netYield != null ? { yield_net: netYield } : {}),
           ...(mgmtFeePerShareField ? { management_fee_per_share: Number(mgmtFeePerShareField) } : {}),
           ...(mgmtFeeTotalField ? { management_fee_total: Number(mgmtFeeTotalField) } : {}),
+          ...(perfFeePerShareField ? { performance_fee_per_share: Number(perfFeePerShareField) } : {}),
+          ...(perfFeeTotalField ? { performance_fee_total: Number(perfFeeTotalField) } : {}),
           pnl_costs: pnlNum,
           ...(sharesEndNum != null ? { total_shares_end: sharesEndNum } : {}),
           ...(notes.trim() ? { notes: notes.trim() } : {}),
@@ -1525,6 +1594,70 @@ function ClosePeriodDialog({
           await Promise.all(feePromises)
         } catch {
           console.warn("[close-period] Failed to create some fund_fee records")
+        }
+      }
+
+      // Performance fee: % of period profit per investor.
+      // Creates fund_fee records (status=accrued) so they appear in liabilities
+      // alongside management fees.
+      const navOpen = period.nav_start ?? 0
+      const profitPerShare = grossNavValue != null ? grossNavValue - navOpen : 0
+      if (grossNavValue != null && profitPerShare > 0) {
+        try {
+          const [posEntries, posMutations] = await Promise.all([
+            fetch(`/api/cap-table-entries?entity=${entityUUID}`).then((r) => r.ok ? r.json() : []),
+            fetch(`/api/fund-mutations?entity=${entityUUID}`).then((r) => r.ok ? r.json() : []),
+          ])
+          const sharesByEntry = new Map<string, number>()
+          for (const m of posMutations as Array<{ cap_table_entry?: string; shares_issued?: number; shares_redeemed?: number }>) {
+            if (!m.cap_table_entry) continue
+            const delta = (m.shares_issued ?? 0) - (m.shares_redeemed ?? 0)
+            sharesByEntry.set(m.cap_table_entry, (sharesByEntry.get(m.cap_table_entry) ?? 0) + delta)
+          }
+
+          // Performance fee rule per share class
+          const perfByClass = new Map<string, { rate: number; feeId: string }>()
+          for (const sc of shareClasses) {
+            const perfRule = (sc._share_class_fee ?? []).find((f) => f.type === "performance")
+            if (perfRule?.rate && perfRule.id) {
+              perfByClass.set(sc.id, { rate: perfRule.rate / 100, feeId: perfRule.id })
+            }
+          }
+          const defaultPerf = perfByClass.values().next().value ?? null
+
+          const accruedAt = closedAt ? closedAt.getTime() : Date.now()
+          const perfPromises: Promise<unknown>[] = []
+          for (const entry of posEntries as Array<{ id: string; share_class?: string | null }>) {
+            const netShares = sharesByEntry.get(entry.id) ?? 0
+            if (netShares <= 0) continue
+            const classId = entry.share_class ?? shareClasses[0]?.id ?? null
+            const rule = (classId ? perfByClass.get(classId) : null) ?? defaultPerf
+            if (!rule) continue
+            const feePerShare = profitPerShare * rule.rate
+            const investorFee = netShares * feePerShare
+            if (investorFee <= 0) continue
+            perfPromises.push(
+              fetch("/api/fund-fees", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  entity: entityUUID,
+                  period: period.id,
+                  share_class: classId,
+                  share_class_fee: rule.feeId,
+                  cap_table_entry: entry.id,
+                  amount: investorFee,
+                  fee_per_share: feePerShare,
+                  shares_outstanding: netShares,
+                  status: "accrued",
+                  accrued_at: accruedAt,
+                }),
+              }),
+            )
+          }
+          await Promise.all(perfPromises)
+        } catch {
+          console.warn("[close-period] Failed to create some performance fund_fee records")
         }
       }
 
@@ -1619,41 +1752,71 @@ function ClosePeriodDialog({
               value={grossNav}
               onChange={(v) => {
                 setGrossNav(v)
-                // Auto-update net NAV when gross changes
-                const fee = mgmtFeePerShareField ? Number(mgmtFeePerShareField) : 0
-                if (v && Number(v) > 0) setNavEnd(String((Number(v) - fee).toFixed(4)))
+                // Auto-update net NAV: gross − mgmt fee/share − perf fee/share
+                const mgmt = mgmtFeePerShareField ? Number(mgmtFeePerShareField) : 0
+                const perf = perfFeePerShareField ? Number(perfFeePerShareField) : 0
+                if (v && Number(v) > 0) setNavEnd(String((Number(v) - mgmt - perf).toFixed(4)))
               }}
               hint={grossYield != null ? <>Gross yield: <span className={grossYield >= 0 ? "text-green-600" : "text-red-600"}>{fmtPct(grossYield)}</span></> : undefined}
               currencyCode={currencyCode}
             />
 
-            <div className="grid grid-cols-2 gap-3">
-              <CcyField
-                id="mgmt-fee-per-share"
-                label="Management fee/share"
-                value={mgmtFeePerShareField}
-                onChange={(v) => {
-                  setMgmtFeePerShareField(v)
-                  if (grossNav && Number(grossNav) > 0)
-                    setNavEnd(String((Number(grossNav) - (v ? Number(v) : 0)).toFixed(4)))
-                }}
-                currencyCode={currencyCode}
-              />
-              <CcyField
-                id="mgmt-fee-total"
-                label="Management fee total"
-                value={mgmtFeeTotalField}
-                onChange={setMgmtFeeTotalField}
-                currencyCode={currencyCode}
-              />
-            </div>
+            {t.hasMgmtFees !== false && (
+              <div className="grid grid-cols-2 gap-3">
+                <CcyField
+                  id="mgmt-fee-per-share"
+                  label="Management fee/share"
+                  value={mgmtFeePerShareField}
+                  onChange={(v) => {
+                    setMgmtFeePerShareField(v)
+                    if (grossNav && Number(grossNav) > 0) {
+                      const perf = perfFeePerShareField ? Number(perfFeePerShareField) : 0
+                      setNavEnd(String((Number(grossNav) - (v ? Number(v) : 0) - perf).toFixed(4)))
+                    }
+                  }}
+                  currencyCode={currencyCode}
+                />
+                <CcyField
+                  id="mgmt-fee-total"
+                  label="Management fee total"
+                  value={mgmtFeeTotalField}
+                  onChange={setMgmtFeeTotalField}
+                  currencyCode={currencyCode}
+                />
+              </div>
+            )}
 
-            {/* Fee breakdown preview (collapsible) */}
-            {feePreviewRows.length > 0 && grossNavValue != null && grossNavValue > 0 && (
+            {t.hasPerfFees && (
+              <div className="grid grid-cols-2 gap-3">
+                <CcyField
+                  id="perf-fee-per-share"
+                  label={`Performance fee/share${t.perfFeeRate ? ` (${t.perfFeeRate})` : ""}`}
+                  value={perfFeePerShareField}
+                  onChange={(v) => {
+                    setPerfFeePerShareField(v)
+                    if (grossNav && Number(grossNav) > 0) {
+                      const mgmt = mgmtFeePerShareField ? Number(mgmtFeePerShareField) : 0
+                      setNavEnd(String((Number(grossNav) - mgmt - (v ? Number(v) : 0)).toFixed(4)))
+                    }
+                  }}
+                  currencyCode={currencyCode}
+                />
+                <CcyField
+                  id="perf-fee-total"
+                  label="Performance fee total"
+                  value={perfFeeTotalField}
+                  onChange={setPerfFeeTotalField}
+                  currencyCode={currencyCode}
+                />
+              </div>
+            )}
+
+            {/* Management fee breakdown (only when management fees configured) */}
+            {t.hasMgmtFees && feePreviewRows.length > 0 && grossNavValue != null && grossNavValue > 0 && (
               <Accordion type="single" collapsible className="rounded-md border overflow-hidden text-xs">
-                <AccordionItem value="fee-breakdown" className="border-b-0">
+                <AccordionItem value="mgmt-fee-breakdown" className="border-b-0">
                   <AccordionTrigger className="bg-muted/30 px-3 py-1.5 font-semibold text-muted-foreground hover:no-underline rounded-none border-0">
-                    Fee breakdown
+                    Management fee breakdown
                   </AccordionTrigger>
                   <AccordionContent className="p-0">
                     <div className="max-h-64 overflow-y-auto">
@@ -1704,6 +1867,72 @@ function ClosePeriodDialog({
                 </AccordionItem>
               </Accordion>
             )}
+
+            {/* Performance fee breakdown (only when performance fees configured) */}
+            {t.hasPerfFees && feePreviewRows.length > 0 && grossNavValue != null && grossNavValue > 0 && period.nav_start != null && (() => {
+              const navOpen = period.nav_start ?? 0
+              const profitPerShare = grossNavValue - navOpen
+              if (profitPerShare <= 0) return null
+              return (
+                <Accordion type="single" collapsible className="rounded-md border overflow-hidden text-xs">
+                  <AccordionItem value="perf-fee-breakdown" className="border-b-0">
+                    <AccordionTrigger className="bg-muted/30 px-3 py-1.5 font-semibold text-muted-foreground hover:no-underline rounded-none border-0">
+                      Performance fee breakdown
+                    </AccordionTrigger>
+                    <AccordionContent className="p-0">
+                      <div className="max-h-64 overflow-y-auto">
+                        <table className="w-full">
+                          <thead className="bg-muted border-y sticky top-0">
+                            <tr>
+                              <th className="text-left px-3 py-1 font-medium text-muted-foreground">Investor</th>
+                              <th className="text-right px-3 py-1 font-medium text-muted-foreground">Shares</th>
+                              <th className="text-right px-3 py-1 font-medium text-muted-foreground">Profit</th>
+                              <th className="text-right px-3 py-1 font-medium text-muted-foreground">Fee</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y">
+                            {feePreviewRows.map((row) => {
+                              const classId = row.scId ?? shareClasses[0]?.id ?? null
+                              const feeRule = classId
+                                ? shareClasses.find((sc) => sc.id === classId)?._share_class_fee?.find((f) => f.type === "performance")
+                                : null
+                              const rate = feeRule?.rate ? feeRule.rate / 100 : 0
+                              const profit = row.shares * profitPerShare
+                              const feeAmount = profit * rate
+                              return (
+                                <tr key={row.entryId}>
+                                  <td className="px-3 py-1.5">{row.name}</td>
+                                  <td className="px-3 py-1.5 text-right tabular-nums">{fmt(row.shares, 4)}</td>
+                                  <td className="px-3 py-1.5 text-right tabular-nums text-emerald-600">+{fmtCcy(profit, currencyCode)}</td>
+                                  <td className="px-3 py-1.5 text-right tabular-nums font-medium text-red-600">−{fmtCcy(feeAmount, currencyCode)}</td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                          <tfoot className="border-t bg-muted sticky bottom-0">
+                            <tr>
+                              <td className="px-3 py-1.5 font-semibold">Total</td>
+                              <td className="px-3 py-1.5 text-right tabular-nums font-semibold">{fmt(feePreviewRows.reduce((s, r) => s + r.shares, 0), 4)}</td>
+                              <td className="px-3 py-1.5 text-right tabular-nums font-semibold text-emerald-600">
+                                +{fmtCcy(feePreviewRows.reduce((s, r) => s + r.shares * profitPerShare, 0), currencyCode)}
+                              </td>
+                              <td className="px-3 py-1.5 text-right tabular-nums font-semibold text-red-600">
+                                −{fmtCcy(feePreviewRows.reduce((s, row) => {
+                                  const classId = row.scId ?? shareClasses[0]?.id ?? null
+                                  const feeRule = classId ? shareClasses.find((sc) => sc.id === classId)?._share_class_fee?.find((f) => f.type === "performance") : null
+                                  const rate = feeRule?.rate ? feeRule.rate / 100 : 0
+                                  return s + row.shares * profitPerShare * rate
+                                }, 0), currencyCode)}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </AccordionContent>
+                  </AccordionItem>
+                </Accordion>
+              )
+            })()}
 
             <CcyField
               id="nav-end"
@@ -1880,48 +2109,66 @@ function PeriodCard({
       {expanded && (
         <div className="border-t">
           {/* Net NAV calculation strip (Step C) */}
-          {!isOpen && (
-            <div className="grid grid-cols-2 sm:grid-cols-5 divide-x divide-y sm:divide-y-0 border-b bg-muted/20">
-              {[
-                {
-                  label: "Gross NAV/share",
-                  value: fmtCcy(period.nav_gross_end, currencyCode),
-                  sub: grossReturnPct != null ? fmtPct(grossReturnPct) : null,
-                  positive: (grossReturnPct ?? 0) >= 0,
-                },
-                {
-                  label: "Mgmt fee total",
-                  value: period.management_fee_total != null ? `−${fmtCcy(period.management_fee_total, currencyCode)}` : "—",
-                  sub: period.management_fee_per_share != null ? `−${fmtCcy(period.management_fee_per_share, currencyCode)}/share` : null,
-                  positive: false,
-                },
-                {
-                  label: "Net NAV/share",
-                  value: fmtCcy(navEnd, currencyCode),
-                  sub: returnPct != null ? fmtPct(returnPct) : null,
-                  positive: (returnPct ?? 0) >= 0,
-                },
-                {
-                  label: "Shares outstanding",
-                  value: totalShares != null ? fmt(totalShares, 4) : "—",
-                  sub: null,
-                  positive: true,
-                },
-                {
-                  label: "Total AUM (reporting)",
-                  value: fmtCcy(reportingAum, currencyCode),
-                  sub: "net NAV × shares",
-                  positive: true,
-                },
-              ].map(({ label, value, sub, positive }) => (
-                <div key={label} className="px-4 py-3 flex flex-col gap-0.5">
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-wide">{label}</p>
-                  <p className="text-sm font-semibold tabular-nums">{value}</p>
-                  {sub && <p className={`text-[10px] ${label === "Total AUM (reporting)" || label === "Shares outstanding" ? "text-muted-foreground" : positive ? "text-emerald-600" : "text-red-600"}`}>{sub}</p>}
-                </div>
-              ))}
-            </div>
-          )}
+          {!isOpen && (() => {
+            const cells: Array<{ label: string; value: string; sub: string | null; positive: boolean }> = [
+              {
+                label: "Gross NAV/share",
+                value: fmtCcy(period.nav_gross_end, currencyCode),
+                sub: grossReturnPct != null ? fmtPct(grossReturnPct) : null,
+                positive: (grossReturnPct ?? 0) >= 0,
+              },
+            ]
+            if (period.management_fee_total != null && period.management_fee_total > 0) {
+              cells.push({
+                label: "Mgmt fee total",
+                value: `−${fmtCcy(period.management_fee_total, currencyCode)}`,
+                sub: period.management_fee_per_share != null ? `−${fmtCcy(period.management_fee_per_share, currencyCode)}/share` : null,
+                positive: false,
+              })
+            }
+            if (period.performance_fee_total != null && period.performance_fee_total > 0) {
+              cells.push({
+                label: "Perf fee total",
+                value: `−${fmtCcy(period.performance_fee_total, currencyCode)}`,
+                sub: period.performance_fee_per_share != null ? `−${fmtCcy(period.performance_fee_per_share, currencyCode)}/share` : null,
+                positive: false,
+              })
+            }
+            cells.push(
+              {
+                label: "Net NAV/share",
+                value: fmtCcy(navEnd, currencyCode),
+                sub: returnPct != null ? fmtPct(returnPct) : null,
+                positive: (returnPct ?? 0) >= 0,
+              },
+              {
+                label: "Shares outstanding",
+                value: totalShares != null ? fmt(totalShares, 4) : "—",
+                sub: null,
+                positive: true,
+              },
+              {
+                label: "Total AUM (reporting)",
+                value: fmtCcy(reportingAum, currencyCode),
+                sub: "net NAV × shares",
+                positive: true,
+              },
+            )
+            return (
+              <div
+                className="grid grid-cols-2 divide-x divide-y sm:divide-y-0 border-b bg-muted/20"
+                style={{ gridTemplateColumns: `repeat(${cells.length}, minmax(0, 1fr))` }}
+              >
+                {cells.map(({ label, value, sub, positive }) => (
+                  <div key={label} className="px-4 py-3 flex flex-col gap-0.5">
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide">{label}</p>
+                    <p className="text-sm font-semibold tabular-nums">{value}</p>
+                    {sub && <p className={`text-[10px] ${label === "Total AUM (reporting)" || label === "Shares outstanding" ? "text-muted-foreground" : positive ? "text-emerald-600" : "text-red-600"}`}>{sub}</p>}
+                  </div>
+                ))}
+              </div>
+            )
+          })()}
 
           {/* Per-investor breakdown (closed periods only, when there are investors) */}
           {!isOpen && investors.length > 0 && (
@@ -2035,12 +2282,18 @@ function DistributionStep({
     // For committed-capital-based schemes, fall back to the total amount subscribed
     // (totalIn) when committed_amount isn't set on the cap_table_entry.
     const committedBase = pos.committedAmount ?? pos.totalIn ?? 0
+    // Profit-based schemes use this investor's gain since cost basis (totalIn).
+    // gain = current value - amount invested. If lastNavEnd is null, fall back to 0.
+    const investorValueNow = lastNavEnd != null ? pos.netShares * lastNavEnd : 0
+    const investorProfit = investorValueNow - (pos.totalIn ?? 0)
     let total = 0
     for (const s of schemes) {
       if (s.basis === "nav" && s.rate != null && lastNavEnd != null)
         total += (s.rate / 100) * pos.netShares * lastNavEnd
       else if (s.basis === "committed_capital" && s.rate != null && committedBase > 0)
         total += (s.rate / 100) * committedBase
+      else if (s.basis === "profit" && s.rate != null && investorProfit > 0)
+        total += (s.rate / 100) * investorProfit
       else if (s.basis === "fixed" && s.fixed_amount != null)
         total += s.fixed_amount * pos.netShares
     }
@@ -2551,8 +2804,9 @@ function RedemptionStep({
 // ─── Open Period Step ─────────────────────────────────────────────────────────
 
 function OpenPeriodStep({
-  lastClosedPeriod, pendingMutations, existingDistributions, existingRedemptions, currencyCode, onOpenPeriod,
+  entityUUID, lastClosedPeriod, pendingMutations, existingDistributions, existingRedemptions, currencyCode, onOpenPeriod,
 }: {
+  entityUUID: string
   lastClosedPeriod: FundPeriod | null
   pendingMutations: FundMutation[]
   existingDistributions: Record<string, { amount: number; mutationId: string; payoutId: string }>
@@ -2560,6 +2814,23 @@ function OpenPeriodStep({
   currencyCode: string
   onOpenPeriod: () => void
 }) {
+  // Fund fees still accrued (unpaid) reduce the fund's remaining cash.
+  const [accruedFeesTotal, setAccruedFeesTotal] = React.useState(0)
+  React.useEffect(() => {
+    let cancelled = false
+    fetch(`/api/fund-fees?entity=${entityUUID}`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list: Array<{ status?: string | null; amount?: number | null }>) => {
+        if (cancelled) return
+        const total = list
+          .filter((f) => f.status === "accrued")
+          .reduce((s, f) => s + (f.amount ?? 0), 0)
+        setAccruedFeesTotal(total)
+      })
+      .catch(() => { if (!cancelled) setAccruedFeesTotal(0) })
+    return () => { cancelled = true }
+  }, [entityUUID])
+
   const sharesEnd = lastClosedPeriod?.total_shares_end ?? null
   const grossNav = lastClosedPeriod?.nav_gross_end ?? lastClosedPeriod?.nav_end ?? null
   const aumEnd = lastClosedPeriod?.total_aum_end ?? (sharesEnd != null && grossNav != null ? sharesEnd * grossNav : null)
@@ -2572,13 +2843,15 @@ function OpenPeriodStep({
   const totalSubAmount = pendingSubs.reduce((s, m) => s + (m.amount_for_shares ?? 0), 0)
 
   const newShares = sharesEnd != null ? sharesEnd - totalRedeemedShares + totalSubShares : null
-  const newAum = aumEnd != null ? aumEnd - totalDistributed - totalRedeemedAmount + totalSubAmount : null
+  const newAum = aumEnd != null ? aumEnd - totalDistributed - accruedFeesTotal - totalRedeemedAmount + totalSubAmount : null
 
   const rows: Array<{ label: string; shares: number | null; amount: number | null; color?: string }> = [
     { label: `End of ${lastClosedPeriod?.label ?? "last period"}`, shares: sharesEnd, amount: aumEnd },
   ]
   if (totalDistributed > 0)
     rows.push({ label: "Distributions paid", shares: null, amount: -totalDistributed, color: "text-amber-600" })
+  if (accruedFeesTotal > 0)
+    rows.push({ label: "Fees accrued", shares: null, amount: -accruedFeesTotal, color: "text-amber-600" })
   if (totalRedeemedShares > 0)
     rows.push({ label: `Redemptions (${existingRedemptions.length} investor${existingRedemptions.length !== 1 ? "s" : ""})`, shares: -totalRedeemedShares, amount: -totalRedeemedAmount, color: "text-red-600" })
   if (totalSubShares > 0)
@@ -2937,6 +3210,7 @@ function MutationWorkflow({
 
         {activeStep === 4 && (
           <OpenPeriodStep
+            entityUUID={entityUUID}
             lastClosedPeriod={lastClosedPeriod}
             pendingMutations={pendingMutations}
             existingDistributions={existingDistributions}

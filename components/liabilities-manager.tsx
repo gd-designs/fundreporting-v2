@@ -5,6 +5,7 @@ import { Trash2, CheckCircle2, ChevronDown, ChevronRight } from "lucide-react"
 import { notifyLiabilitiesUpdate } from "@/lib/ledger-events"
 import { useRouter, usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -116,9 +117,11 @@ function AccruedFeesSection({
 }) {
   const [fees, setFees] = React.useState<FundFee[]>([])
   const [loading, setLoading] = React.useState(true)
-  const [markingId, setMarkingId] = React.useState<string | null>(null)
-  const [confirmId, setConfirmId] = React.useState<string | null>(null)
   const [expanded, setExpanded] = React.useState(false)
+  const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set())
+  const [bulkOpen, setBulkOpen] = React.useState(false)
+  const [bulkDate, setBulkDate] = React.useState<Date | undefined>(new Date())
+  const [bulkSaving, setBulkSaving] = React.useState(false)
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -126,8 +129,9 @@ function AccruedFeesSection({
       const res = await fetch(`/api/fund-fees?entity=${entityUUID}`, { cache: "no-store" })
       const data: FundFee[] = res.ok ? await res.json() : []
       const accrued = data.filter((f) => f.status === "accrued")
-      console.log("[accrued-fees] raw data:", JSON.stringify(accrued.slice(0, 2)))
       setFees(accrued)
+      // Select all by default whenever the list refreshes
+      setSelectedIds(new Set(accrued.map((f) => f.id)))
       onTotalChange(accrued.reduce((s, f) => s + (f.amount ?? 0), 0))
     } catch {
       onTotalChange(0)
@@ -138,18 +142,35 @@ function AccruedFeesSection({
 
   React.useEffect(() => { void load() }, [load])
 
-  async function markPaid(id: string) {
-    setMarkingId(id)
+  function toggle(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+  function toggleAll(check: boolean) {
+    setSelectedIds(check ? new Set(fees.map((f) => f.id)) : new Set())
+  }
+
+  async function bulkMarkPaid() {
+    if (!bulkDate || selectedIds.size === 0) return
+    setBulkSaving(true)
     try {
-      await fetch(`/api/fund-fees/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "paid", paid_at: Date.now() }),
-      })
+      const ts = bulkDate.getTime()
+      await Promise.all(
+        Array.from(selectedIds).map((id) =>
+          fetch(`/api/fund-fees/${id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ status: "paid", paid_at: ts }),
+          }),
+        ),
+      )
+      setBulkOpen(false)
       await load()
     } finally {
-      setMarkingId(null)
-      setConfirmId(null)
+      setBulkSaving(false)
     }
   }
 
@@ -167,6 +188,10 @@ function AccruedFeesSection({
   if (fees.length === 0) return null
 
   const total = fees.reduce((s, f) => s + (f.amount ?? 0), 0)
+
+  const allSelected = fees.length > 0 && selectedIds.size === fees.length
+  const someSelected = selectedIds.size > 0 && selectedIds.size < fees.length
+  const selectedTotal = fees.filter((f) => selectedIds.has(f.id)).reduce((s, f) => s + (f.amount ?? 0), 0)
 
   return (
     <div className="rounded-lg border border-orange-200 bg-orange-50/30">
@@ -186,91 +211,115 @@ function AccruedFeesSection({
           {formatAmountWithCurrency(total, currencyCode)}
         </span>
       </button>
-      {expanded && <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b bg-orange-50/60">
-            <th className="px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Investor</th>
-            <th className="px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Period</th>
-            <th className="px-4 py-2 text-right text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Shares</th>
-            <th className="px-4 py-2 text-right text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Fee/share</th>
-            <th className="px-4 py-2 text-right text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Amount</th>
-            <th className="px-4 py-2" />
-          </tr>
-        </thead>
-        <tbody className="divide-y">
-          {fees.map((f) => {
-            const isConfirming = confirmId === f.id
-            const isMarking = markingId === f.id
-            return (
-              <tr key={f.id} className="hover:bg-orange-50/40">
-                <td className="px-4 py-3">
-                  <div className="font-medium">{f._cap_table_entry?._shareholder?.name ?? "—"}</div>
-                  {f._cap_table_entry?._shareholder?.email && (
-                    <div className="text-xs text-muted-foreground">{f._cap_table_entry._shareholder.email}</div>
-                  )}
-                </td>
-                <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
-                  {f._period?.label ?? formatDate(f.accrued_at)}
-                </td>
-                <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
-                  {f.shares_outstanding != null ? f.shares_outstanding.toFixed(2) : "—"}
-                </td>
-                <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
-                  {(() => {
-                    const fps = f.fee_per_share ?? (f.amount != null && f.shares_outstanding ? f.amount / f.shares_outstanding : null)
-                    return fps != null ? formatAmountWithCurrency(fps, currencyCode) : "—"
-                  })()}
-                </td>
-                <td className="px-4 py-3 text-right tabular-nums font-medium text-red-500">
-                  {f.amount != null ? formatAmountWithCurrency(f.amount, currencyCode) : "—"}
-                </td>
-                <td className="px-4 py-3 text-right">
-                  {isConfirming ? (
-                    <div className="flex items-center justify-end gap-1">
-                      <Button
-                        size="sm"
-                        variant="default"
-                        className="h-6 px-2 text-xs"
-                        disabled={isMarking}
-                        onClick={() => markPaid(f.id)}
-                      >
-                        {isMarking ? "…" : "Confirm paid"}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-6 px-2 text-xs"
-                        onClick={() => setConfirmId(null)}
-                      >
-                        Cancel
-                      </Button>
-                    </div>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-6 px-2 text-xs gap-1"
-                      onClick={() => setConfirmId(f.id)}
-                    >
-                      <CheckCircle2 className="size-3" />
-                      Mark paid
-                    </Button>
-                  )}
+      {expanded && (
+        <>
+          <div className="flex items-center justify-between px-4 py-2 border-b border-orange-200 bg-orange-50/40">
+            <p className="text-xs text-muted-foreground">
+              {selectedIds.size} of {fees.length} selected · {formatAmountWithCurrency(selectedTotal, currencyCode)}
+            </p>
+            <Button
+              size="sm"
+              className="h-7 text-xs gap-1"
+              disabled={selectedIds.size === 0}
+              onClick={() => { setBulkDate(new Date()); setBulkOpen(true) }}
+            >
+              <CheckCircle2 className="size-3.5" />
+              Mark all selected as paid
+            </Button>
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b bg-orange-50/60">
+                <th className="px-3 py-2 w-8">
+                  <Checkbox
+                    checked={allSelected ? true : someSelected ? "indeterminate" : false}
+                    onCheckedChange={(v) => toggleAll(!!v)}
+                    aria-label="Select all accrued fees"
+                  />
+                </th>
+                <th className="px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Investor</th>
+                <th className="px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Period</th>
+                <th className="px-4 py-2 text-right text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Shares</th>
+                <th className="px-4 py-2 text-right text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Fee/share</th>
+                <th className="px-4 py-2 text-right text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Amount</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {fees.map((f) => {
+                const checked = selectedIds.has(f.id)
+                return (
+                  <tr key={f.id} className="hover:bg-orange-50/40">
+                    <td className="px-3 py-3 text-center">
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={() => toggle(f.id)}
+                        aria-label="Select fee"
+                      />
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium">{f._cap_table_entry?._shareholder?.name ?? "—"}</div>
+                      {f._cap_table_entry?._shareholder?.email && (
+                        <div className="text-xs text-muted-foreground">{f._cap_table_entry._shareholder.email}</div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
+                      {f._period?.label ?? formatDate(f.accrued_at)}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
+                      {f.shares_outstanding != null ? f.shares_outstanding.toFixed(2) : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">
+                      {(() => {
+                        const fps = f.fee_per_share ?? (f.amount != null && f.shares_outstanding ? f.amount / f.shares_outstanding : null)
+                        return fps != null ? formatAmountWithCurrency(fps, currencyCode) : "—"
+                      })()}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums font-medium text-red-500">
+                      {f.amount != null ? formatAmountWithCurrency(f.amount, currencyCode) : "—"}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="border-t bg-orange-50/60 font-semibold">
+                <td />
+                <td colSpan={4} className="px-4 py-2 text-[10px] uppercase tracking-wide text-muted-foreground">Total accrued</td>
+                <td className="px-4 py-2 text-right tabular-nums text-red-500">
+                  {formatAmountWithCurrency(total, currencyCode)}
                 </td>
               </tr>
-            )
-          })}
-        </tbody>
-        <tfoot>
-          <tr className="border-t bg-orange-50/60 font-semibold">
-            <td colSpan={4} className="px-4 py-2 text-[10px] uppercase tracking-wide text-muted-foreground">Total accrued</td>
-            <td className="px-4 py-2 text-right tabular-nums text-red-500">
-              {formatAmountWithCurrency(total, currencyCode)}
-            </td>
-            <td />
-          </tr>
-        </tfoot>
-      </table>}
+            </tfoot>
+          </table>
+        </>
+      )}
+
+      <Dialog open={bulkOpen} onOpenChange={(v) => { if (!v && !bulkSaving) setBulkOpen(false) }}>
+        <DialogContent className="sm:max-w-xs">
+          <DialogHeader>
+            <DialogTitle>Mark fees as paid</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-3 py-2">
+            <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-1">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Selected</span>
+                <span className="font-medium">{selectedIds.size} fee{selectedIds.size === 1 ? "" : "s"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Total</span>
+                <span className="font-medium text-red-500">{formatAmountWithCurrency(selectedTotal, currencyCode)}</span>
+              </div>
+            </div>
+            <DatePickerInput id="fee-bulk-date" label="Payment date" value={bulkDate} onChange={setBulkDate} />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkOpen(false)} disabled={bulkSaving}>Cancel</Button>
+            <Button onClick={bulkMarkPaid} disabled={bulkSaving || !bulkDate || selectedIds.size === 0}>
+              {bulkSaving ? "Processing…" : "Confirm paid"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -288,12 +337,12 @@ function PendingPayoutsSection({
 }) {
   const [payouts, setPayouts] = React.useState<FundPayout[]>([])
   const [loading, setLoading] = React.useState(true)
-  const [markingId, setMarkingId] = React.useState<string | null>(null)
   const [expanded, setExpanded] = React.useState(false)
   const [deletingPayoutId, setDeletingPayoutId] = React.useState<string | null>(null)
-  const [payDialogPayout, setPayDialogPayout] = React.useState<FundPayout | null>(null)
-  const [payDate, setPayDate] = React.useState<Date | undefined>(new Date())
-  const [paySaving, setPaySaving] = React.useState(false)
+  const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set())
+  const [bulkOpen, setBulkOpen] = React.useState(false)
+  const [bulkDate, setBulkDate] = React.useState<Date | undefined>(new Date())
+  const [bulkSaving, setBulkSaving] = React.useState(false)
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -301,6 +350,7 @@ function PendingPayoutsSection({
       const res = await fetch(`/api/fund-payouts?entity=${entityUUID}&status=pending`, { cache: "no-store" })
       const data: FundPayout[] = res.ok ? await res.json() : []
       setPayouts(data)
+      setSelectedIds(new Set(data.map((p) => p.id)))
       onTotalChange(data.reduce((s, p) => s + (p.amount ?? 0), 0))
     } catch {
       onTotalChange(0)
@@ -311,20 +361,35 @@ function PendingPayoutsSection({
 
   React.useEffect(() => { void load() }, [load])
 
-  async function markPaid(id: string, date: Date) {
-    setMarkingId(id)
-    setPaySaving(true)
+  function toggle(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+  function toggleAll(check: boolean) {
+    setSelectedIds(check ? new Set(payouts.map((p) => p.id)) : new Set())
+  }
+
+  async function bulkMarkPaid() {
+    if (!bulkDate || selectedIds.size === 0) return
+    setBulkSaving(true)
     try {
-      await fetch(`/api/fund-payout-pay`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, date: date.getTime() }),
-      })
-      setPayDialogPayout(null)
+      const ts = bulkDate.getTime()
+      // Process sequentially because each call creates ledger transactions and we
+      // want predictable ordering / failure isolation.
+      for (const id of Array.from(selectedIds)) {
+        await fetch(`/api/fund-payout-pay`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, date: ts }),
+        })
+      }
+      setBulkOpen(false)
       await load()
     } finally {
-      setMarkingId(null)
-      setPaySaving(false)
+      setBulkSaving(false)
     }
   }
 
@@ -342,6 +407,10 @@ function PendingPayoutsSection({
   if (payouts.length === 0) return null
 
   const total = payouts.reduce((s, p) => s + (p.amount ?? 0), 0)
+
+  const allSelected = payouts.length > 0 && selectedIds.size === payouts.length
+  const someSelected = selectedIds.size > 0 && selectedIds.size < payouts.length
+  const selectedTotal = payouts.filter((p) => selectedIds.has(p.id)).reduce((s, p) => s + (p.amount ?? 0), 0)
 
   return (
     <div className="rounded-lg border border-amber-200 bg-amber-50/30">
@@ -361,127 +430,141 @@ function PendingPayoutsSection({
           {formatAmountWithCurrency(total, currencyCode)}
         </span>
       </button>
-      {expanded && <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b bg-amber-50/60">
-            <th className="px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Investor</th>
-            <th className="px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Type</th>
-            <th className="px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Declared</th>
-            <th className="px-4 py-2 text-right text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Amount</th>
-            <th className="px-4 py-2" />
-          </tr>
-        </thead>
-        <tbody className="divide-y">
-          {payouts.map((p) => {
-            const isMarking = markingId === p.id
-            const typeKey = p.type ?? ""
-            return (
-              <tr key={p.id} className="hover:bg-amber-50/40">
-                <td className="px-4 py-3">
-                  <div className="font-medium">{p._cap_table_entry?._shareholder?.name ?? "—"}</div>
-                  {p._cap_table_entry?._shareholder?.email && (
-                    <div className="text-xs text-muted-foreground">{p._cap_table_entry._shareholder.email}</div>
-                  )}
-                </td>
-                <td className="px-4 py-3">
-                  {p.type ? (
-                    <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${PAYOUT_TYPE_COLOR[typeKey] ?? "bg-muted text-muted-foreground"}`}>
-                      {PAYOUT_TYPE_LABEL[typeKey] ?? p.type}
-                    </span>
-                  ) : "—"}
-                </td>
-                <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
-                  {formatDate(p.declared_at)}
-                </td>
-                <td className="px-4 py-3 text-right tabular-nums font-medium text-red-500">
-                  {p.amount != null ? formatAmountWithCurrency(p.amount, currencyCode) : "—"}
-                </td>
-                <td className="px-4 py-3 text-right">
-                  <div className="flex items-center justify-end gap-1">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-6 px-2 text-xs gap-1"
-                      disabled={isMarking}
-                      onClick={() => { setPayDialogPayout(p); setPayDate(p.declared_at ? new Date(p.declared_at) : new Date()) }}
-                    >
-                      <CheckCircle2 className="size-3" />
-                      {isMarking ? "…" : "Mark paid"}
-                    </Button>
-                    {deletingPayoutId === p.id ? (
-                      <div className="flex items-center gap-1">
-                        <Button size="sm" variant="destructive" className="h-6 px-2 text-xs"
-                          disabled={deletingPayoutId === p.id && isMarking}
-                          onClick={async () => {
-                            setDeletingPayoutId(p.id)
-                            try {
-                              if (p.fund_mutation) {
-                                await fetch(`/api/fund-mutations/${p.fund_mutation}`, { method: "DELETE" }).catch(() => {})
-                              }
-                              await fetch(`/api/fund-payouts/${p.id}`, { method: "DELETE" })
-                              void load()
-                            } finally {
-                              setDeletingPayoutId(null)
-                            }
-                          }}
-                        >Delete</Button>
-                        <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setDeletingPayoutId(null)}>Cancel</Button>
-                      </div>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-6 px-1.5 text-muted-foreground hover:text-destructive"
-                        onClick={() => setDeletingPayoutId(p.id)}
-                      >
-                        <Trash2 className="size-3" />
-                      </Button>
-                    )}
-                  </div>
-                </td>
+      {expanded && (
+        <>
+          <div className="flex items-center justify-between px-4 py-2 border-b border-amber-200 bg-amber-50/40">
+            <p className="text-xs text-muted-foreground">
+              {selectedIds.size} of {payouts.length} selected · {formatAmountWithCurrency(selectedTotal, currencyCode)}
+            </p>
+            <Button
+              size="sm"
+              className="h-7 text-xs gap-1"
+              disabled={selectedIds.size === 0}
+              onClick={() => { setBulkDate(new Date()); setBulkOpen(true) }}
+            >
+              <CheckCircle2 className="size-3.5" />
+              Mark all selected as paid
+            </Button>
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b bg-amber-50/60">
+                <th className="px-3 py-2 w-8">
+                  <Checkbox
+                    checked={allSelected ? true : someSelected ? "indeterminate" : false}
+                    onCheckedChange={(v) => toggleAll(!!v)}
+                    aria-label="Select all pending payouts"
+                  />
+                </th>
+                <th className="px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Investor</th>
+                <th className="px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Type</th>
+                <th className="px-4 py-2 text-left text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Declared</th>
+                <th className="px-4 py-2 text-right text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Amount</th>
+                <th className="px-4 py-2" />
               </tr>
-            )
-          })}
-        </tbody>
-        <tfoot>
-          <tr className="border-t bg-amber-50/60 font-semibold">
-            <td colSpan={3} className="px-4 py-2 text-[10px] uppercase tracking-wide text-muted-foreground">Total pending</td>
-            <td className="px-4 py-2 text-right tabular-nums text-red-500">
-              {formatAmountWithCurrency(total, currencyCode)}
-            </td>
-            <td />
-          </tr>
-        </tfoot>
-      </table>}
+            </thead>
+            <tbody className="divide-y">
+              {payouts.map((p) => {
+                const typeKey = p.type ?? ""
+                const checked = selectedIds.has(p.id)
+                return (
+                  <tr key={p.id} className="hover:bg-amber-50/40">
+                    <td className="px-3 py-3 text-center">
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={() => toggle(p.id)}
+                        aria-label="Select payout"
+                      />
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium">{p._cap_table_entry?._shareholder?.name ?? "—"}</div>
+                      {p._cap_table_entry?._shareholder?.email && (
+                        <div className="text-xs text-muted-foreground">{p._cap_table_entry._shareholder.email}</div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      {p.type ? (
+                        <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${PAYOUT_TYPE_COLOR[typeKey] ?? "bg-muted text-muted-foreground"}`}>
+                          {PAYOUT_TYPE_LABEL[typeKey] ?? p.type}
+                        </span>
+                      ) : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
+                      {formatDate(p.declared_at)}
+                    </td>
+                    <td className="px-4 py-3 text-right tabular-nums font-medium text-red-500">
+                      {p.amount != null ? formatAmountWithCurrency(p.amount, currencyCode) : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {deletingPayoutId === p.id ? (
+                        <div className="flex items-center justify-end gap-1">
+                          <Button size="sm" variant="destructive" className="h-6 px-2 text-xs"
+                            onClick={async () => {
+                              setDeletingPayoutId(p.id)
+                              try {
+                                if (p.fund_mutation) {
+                                  await fetch(`/api/fund-mutations/${p.fund_mutation}`, { method: "DELETE" }).catch(() => {})
+                                }
+                                await fetch(`/api/fund-payouts/${p.id}`, { method: "DELETE" })
+                                void load()
+                              } finally {
+                                setDeletingPayoutId(null)
+                              }
+                            }}
+                          >Delete</Button>
+                          <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={() => setDeletingPayoutId(null)}>Cancel</Button>
+                        </div>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 px-1.5 text-muted-foreground hover:text-destructive"
+                          onClick={() => setDeletingPayoutId(p.id)}
+                        >
+                          <Trash2 className="size-3" />
+                        </Button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="border-t bg-amber-50/60 font-semibold">
+                <td />
+                <td colSpan={3} className="px-4 py-2 text-[10px] uppercase tracking-wide text-muted-foreground">Total pending</td>
+                <td className="px-4 py-2 text-right tabular-nums text-red-500">
+                  {formatAmountWithCurrency(total, currencyCode)}
+                </td>
+                <td />
+              </tr>
+            </tfoot>
+          </table>
+        </>
+      )}
 
-      {/* Pay dialog with date picker */}
-      <Dialog open={!!payDialogPayout} onOpenChange={(v) => { if (!v) setPayDialogPayout(null) }}>
+      <Dialog open={bulkOpen} onOpenChange={(v) => { if (!v && !bulkSaving) setBulkOpen(false) }}>
         <DialogContent className="sm:max-w-xs">
           <DialogHeader>
-            <DialogTitle>Record payment</DialogTitle>
+            <DialogTitle>Mark payouts as paid</DialogTitle>
           </DialogHeader>
           <div className="flex flex-col gap-3 py-2">
-            {payDialogPayout && (
-              <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-1">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Investor</span>
-                  <span className="font-medium">{payDialogPayout._cap_table_entry?._shareholder?.name ?? "—"}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Amount</span>
-                  <span className="font-medium text-red-500">{payDialogPayout.amount != null ? formatAmountWithCurrency(payDialogPayout.amount, currencyCode) : "—"}</span>
-                </div>
+            <div className="rounded-md border bg-muted/30 p-3 text-sm space-y-1">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Selected</span>
+                <span className="font-medium">{selectedIds.size} payout{selectedIds.size === 1 ? "" : "s"}</span>
               </div>
-            )}
-            <DatePickerInput id="pay-date" label="Payment date" value={payDate} onChange={setPayDate} />
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Total</span>
+                <span className="font-medium text-red-500">{formatAmountWithCurrency(selectedTotal, currencyCode)}</span>
+              </div>
+            </div>
+            <DatePickerInput id="payout-bulk-date" label="Payment date" value={bulkDate} onChange={setBulkDate} />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPayDialogPayout(null)}>Cancel</Button>
-            <Button
-              disabled={paySaving || !payDate}
-              onClick={() => payDialogPayout && payDate && markPaid(payDialogPayout.id, payDate)}
-            >
-              {paySaving ? "Processing…" : "Confirm paid"}
+            <Button variant="outline" onClick={() => setBulkOpen(false)} disabled={bulkSaving}>Cancel</Button>
+            <Button onClick={bulkMarkPaid} disabled={bulkSaving || !bulkDate || selectedIds.size === 0}>
+              {bulkSaving ? "Processing…" : "Confirm paid"}
             </Button>
           </DialogFooter>
         </DialogContent>

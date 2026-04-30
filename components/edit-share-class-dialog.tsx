@@ -54,7 +54,7 @@ export function EditShareClassDialog({
   const [distsLoading, setDistsLoading] = React.useState(false)
   const [editingDistId, setEditingDistId] = React.useState<string | null>(null)
   const [distName, setDistName] = React.useState("")
-  const [distBasis, setDistBasis] = React.useState<"nav" | "committed_capital" | "fixed">("nav")
+  const [distBasis, setDistBasis] = React.useState<"nav" | "committed_capital" | "fixed" | "profit">("nav")
   const [distRate, setDistRate] = React.useState("")
   const [distFixedAmount, setDistFixedAmount] = React.useState("")
   const [distFrequency, setDistFrequency] = React.useState<"monthly" | "quarterly" | "bi-annually" | "annually" | "on_close">("on_close")
@@ -340,7 +340,11 @@ export function EditShareClassDialog({
                         <span className={d.name ? "text-xs text-muted-foreground" : "font-medium"}>
                           {d.basis === "fixed"
                             ? `${d.fixed_amount ?? "—"} fixed per share`
-                            : `${d.rate ?? "—"}% of ${d.basis === "nav" ? "current value (NAV)" : "total investment"}`
+                            : `${d.rate ?? "—"}% of ${
+                                d.basis === "nav" ? "current value (NAV)"
+                                : d.basis === "profit" ? "profit"
+                                : "total investment"
+                              }`
                           }
                           {" · "}{d.frequency === "on_close" ? "on period close" : d.frequency}
                           {!d.enabled && " · disabled"}
@@ -381,6 +385,7 @@ export function EditShareClassDialog({
                       <SelectContent>
                         <SelectItem value="nav">% of current value (NAV)</SelectItem>
                         <SelectItem value="committed_capital">% of total investment</SelectItem>
+                        <SelectItem value="profit">% of profit</SelectItem>
                         <SelectItem value="fixed">Fixed amount per share</SelectItem>
                       </SelectContent>
                     </Select>
