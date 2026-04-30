@@ -185,6 +185,7 @@ export async function POST(req: NextRequest) {
       shareholder: fundSh.id,
       share_class: shareClassId || null,
       committed_amount: committedAmount ?? null,
+      currency: currencyId,
       issued_at: subscriptionDate,
     }),
   });

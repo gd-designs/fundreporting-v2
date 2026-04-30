@@ -319,6 +319,7 @@ export function AddFundInvestorDialog({
           shareholder: fundSh.id,
           share_class: shareClassId || null,
           committed_amount: committedAmount ? Number(committedAmount) : null,
+          ...(currencyId != null ? { currency: currencyId } : {}),
           issued_at: subscriptionDate ? subscriptionDate.getTime() : Date.now(),
         }),
       })

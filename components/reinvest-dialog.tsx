@@ -62,9 +62,15 @@ export function ReinvestDialog({
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
-  // Load currency id matching currencyCode
+  // Resolve currency: prefer the existing entry's currency (so reinvestments
+  // stay in the investor's original currency); fall back to the fund's currency.
   React.useEffect(() => {
     if (!open) return
+    const entryCurrencyId = (entry as { currency?: number | null }).currency ?? null
+    if (entryCurrencyId != null) {
+      setCurrencyId(entryCurrencyId)
+      return
+    }
     fetch("/api/currencies")
       .then((r) => r.ok ? r.json() : [])
       .then((data: CurrencyOption[]) => {
@@ -72,7 +78,7 @@ export function ReinvestDialog({
         if (matched) setCurrencyId(matched.id)
       })
       .catch(() => {})
-  }, [open, currencyCode])
+  }, [open, currencyCode, entry])
 
   // Reset on open
   React.useEffect(() => {
