@@ -1,4 +1,5 @@
 import Link from "next/link"
+import Image from "next/image"
 import { redirect } from "next/navigation"
 import { cookies } from "next/headers"
 import { Button } from "@/components/ui/button"
@@ -25,11 +26,8 @@ export default async function RootPage() {
       {/* ── Nav ────────────────────────────────────────────────────────────── */}
       <header className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur">
         <nav className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
-          <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
-            <span className="inline-flex size-7 items-center justify-center rounded-md bg-foreground text-background">
-              <Layers className="size-4" />
-            </span>
-            FundReporting
+          <Link href="/" className="flex items-center" aria-label="FundReporting home">
+            <Image src="/fundreporting-logo.svg" alt="FundReporting" width={211} height={24} priority />
           </Link>
           <div className="flex items-center gap-2">
             <Button asChild variant="ghost" size="sm">
@@ -161,11 +159,9 @@ export default async function RootPage() {
       {/* ── Footer ───────────────────────────────────────────────────────── */}
       <footer className="border-t">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-4 py-8 text-xs text-muted-foreground sm:flex-row">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex size-5 items-center justify-center rounded bg-foreground text-background">
-              <Layers className="size-3" />
-            </span>
-            <span>© {new Date().getFullYear()} FundReporting</span>
+          <div className="flex items-center gap-3">
+            <Image src="/fundreporting-logo.svg" alt="FundReporting" width={140} height={16} className="opacity-70" />
+            <span>© {new Date().getFullYear()}</span>
           </div>
           <div className="flex items-center gap-4">
             <Link href="/login" className="hover:text-foreground">Sign in</Link>
