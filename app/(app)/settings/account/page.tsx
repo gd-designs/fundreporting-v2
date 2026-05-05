@@ -48,12 +48,6 @@ export default function AccountPage() {
     }
   }
 
-  const [currentPassword, setCurrentPassword] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [savingPassword, setSavingPassword] = useState(false);
-  const [passwordMsg, setPasswordMsg] = useState<string | null>(null);
-
   useEffect(() => {
     fetch("/api/auth/me")
       .then((r) => r.json())
@@ -81,37 +75,6 @@ export default function AccountPage() {
       }
     } finally {
       setSavingProfile(false);
-    }
-  }
-
-  async function savePassword(e: React.FormEvent) {
-    e.preventDefault();
-    if (newPassword !== confirmPassword) {
-      setPasswordMsg("Passwords do not match.");
-      return;
-    }
-    setSavingPassword(true);
-    setPasswordMsg(null);
-    try {
-      const res = await fetch("/api/auth/me", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          current_password: currentPassword,
-          password: newPassword,
-        }),
-      });
-      if (res.ok) {
-        setPasswordMsg("Password updated.");
-        setCurrentPassword("");
-        setNewPassword("");
-        setConfirmPassword("");
-      } else {
-        const d = await res.json();
-        setPasswordMsg(d.error ?? "Failed to update password.");
-      }
-    } finally {
-      setSavingPassword(false);
     }
   }
 
@@ -190,65 +153,6 @@ export default function AccountPage() {
                 </Button>
                 {profileMsg && (
                   <p className="text-xs text-muted-foreground">{profileMsg}</p>
-                )}
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-
-        <Separator />
-
-        {/* Password */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Change password</CardTitle>
-            <CardDescription>
-              Choose a new password for your account.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={savePassword} className="flex flex-col gap-4">
-              <div className="grid gap-1.5">
-                <Label htmlFor="current-password">Current password</Label>
-                <Input
-                  id="current-password"
-                  type="password"
-                  value={currentPassword}
-                  onChange={(e) => setCurrentPassword(e.target.value)}
-                  autoComplete="current-password"
-                />
-              </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="new-password">New password</Label>
-                <Input
-                  id="new-password"
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  autoComplete="new-password"
-                />
-              </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="confirm-password">Confirm new password</Label>
-                <Input
-                  id="confirm-password"
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  autoComplete="new-password"
-                />
-              </div>
-              <div className="flex items-center gap-3">
-                <Button type="submit" size="sm" disabled={savingPassword}>
-                  {savingPassword ? (
-                    <Loader2 className="size-3.5 animate-spin" />
-                  ) : (
-                    <Save className="size-3.5" />
-                  )}
-                  Update password
-                </Button>
-                {passwordMsg && (
-                  <p className="text-xs text-muted-foreground">{passwordMsg}</p>
                 )}
               </div>
             </form>
