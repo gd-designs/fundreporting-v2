@@ -52,6 +52,9 @@ import {
 } from "@/components/ui/tooltip";
 import { UploadDocumentsDialog } from "@/components/upload-documents-dialog";
 import { AssetOverviewChart } from "@/components/asset-overview-chart";
+import { PeriodOverviewLedger } from "@/components/period-overview-ledger";
+import { PeriodCandleChart } from "@/components/period-candle-chart";
+import { computeLedger, usePeriodLedger } from "@/lib/period-ledger";
 import type { EntityAsset } from "@/lib/entity-assets";
 import { updateEntityAsset, formatCurrency } from "@/lib/entity-assets";
 import {
@@ -800,6 +803,17 @@ export function AssetManagementSheet({
     [ledgerRows],
   );
 
+  // Period ledger (only for fund-equity assets — driven by fund_period + fund_mutation)
+  const periodLedgerEnabled = !!asset?.fundId
+  const periodLedgerAssetId = periodLedgerEnabled ? asset?.id ?? null : null
+  const { data: periodLedgerData, loading: periodLedgerLoading, error: periodLedgerError } =
+    usePeriodLedger(periodLedgerAssetId)
+  const periodLedger = React.useMemo(() => {
+    if (!periodLedgerData) return null
+    return computeLedger(periodLedgerData.periods, periodLedgerData.mutations)
+  }, [periodLedgerData])
+  const periodCurrencyCode = periodLedgerData?.fund?.currencyCode ?? asset?.currencyCode ?? null;
+
   const showSourceCol = React.useMemo(
     () => ledgerRows.some((r) => r.kind === "transaction" && r.source),
     [ledgerRows],
@@ -1396,8 +1410,29 @@ export function AssetManagementSheet({
                   <p className="text-muted-foreground mb-4 text-xs uppercase tracking-wide">
                     Balance over time
                   </p>
-                  <AssetOverviewChart rows={overviewRows} />
+                  {periodLedgerEnabled && periodLedger && periodLedger.series.length > 0 ? (
+                    <PeriodCandleChart
+                      series={periodLedger.series}
+                      events={periodLedger.eventMarkers}
+                      latestPeriodStart={periodLedger.latestPeriodStart}
+                    />
+                  ) : (
+                    <AssetOverviewChart rows={overviewRows} />
+                  )}
                 </div>
+                {periodLedgerEnabled && (
+                  <div className="rounded-md border p-4">
+                    <p className="text-muted-foreground mb-4 text-xs uppercase tracking-wide">
+                      Period overview
+                    </p>
+                    <PeriodOverviewLedger
+                      rows={periodLedger?.rows ?? []}
+                      currencyCode={periodCurrencyCode}
+                      loading={periodLedgerLoading}
+                      error={periodLedgerError}
+                    />
+                  </div>
+                )}
               </TabsContent>
 
               {/* Ledger */}

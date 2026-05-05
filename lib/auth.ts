@@ -11,6 +11,9 @@ export type CurrentUser = {
   email: string
   created_at: string
   avatar?: { url?: string } | null
+  is_admin?: boolean
+  totp_enabled?: boolean
+  impersonated_by?: number | null
 }
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {

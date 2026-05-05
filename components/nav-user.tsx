@@ -6,7 +6,9 @@ import {
   ChevronsUpDown,
   CreditCard,
   LogOut,
+  ShieldCheck,
   Sparkles,
+  UserCog,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -35,6 +37,7 @@ export function NavUser({
     name: string;
     email: string;
     avatar?: { url?: string } | null;
+    is_admin?: boolean;
   };
 }) {
   const { isMobile } = useSidebar();
@@ -115,11 +118,25 @@ export function NavUser({
                 </Link>
               </DropdownMenuItem>
               <DropdownMenuItem asChild>
+                <Link href="/settings/security">
+                  <ShieldCheck />
+                  Security
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
                 <Link href="/settings/notifications">
                   <Bell />
                   Notifications
                 </Link>
               </DropdownMenuItem>
+              {user.is_admin && (
+                <DropdownMenuItem asChild>
+                  <Link href="/admin/users">
+                    <UserCog />
+                    Admin · Users
+                  </Link>
+                </DropdownMenuItem>
+              )}
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleLogout}>

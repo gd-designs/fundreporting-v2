@@ -90,7 +90,8 @@ const ENTITY_HREFS: Record<string, string> = {
   asset_manager: "/asset-manager",
 }
 
-const QUICK_ACCESS_KEY = "sidebar:quick-access"
+const quickAccessKey = (userId: number | undefined) =>
+  userId ? `sidebar:quick-access:${userId}` : "sidebar:quick-access"
 
 const ENTITY_SLUGS: Record<string, EntityType> = {
   portfolio: "portfolio",
@@ -422,23 +423,27 @@ function FundInAmNav({
   )
 }
 
-function NavLinks({ entities }: { entities: UnifiedEntity[] }) {
+function NavLinks({ entities, userId }: { entities: UnifiedEntity[]; userId: number }) {
   const pathname = usePathname()
+  const storageKey = quickAccessKey(userId)
 
   const [pinnedIds, setPinnedIds] = React.useState<string[]>([])
 
   React.useEffect(() => {
     try {
-      const stored = JSON.parse(localStorage.getItem(QUICK_ACCESS_KEY) ?? "[]")
+      const stored = JSON.parse(localStorage.getItem(storageKey) ?? "[]")
       if (Array.isArray(stored)) setPinnedIds(stored)
-    } catch {}
-  }, [])
+      else setPinnedIds([])
+    } catch {
+      setPinnedIds([])
+    }
+  }, [storageKey])
   const [showPicker, setShowPicker] = React.useState(false)
 
   function pin(id: string) {
     setPinnedIds(prev => {
       const next = prev.includes(id) ? prev : [...prev, id]
-      localStorage.setItem(QUICK_ACCESS_KEY, JSON.stringify(next))
+      localStorage.setItem(storageKey, JSON.stringify(next))
       return next
     })
     setShowPicker(false)
@@ -447,7 +452,7 @@ function NavLinks({ entities }: { entities: UnifiedEntity[] }) {
   function unpin(id: string) {
     setPinnedIds(prev => {
       const next = prev.filter(p => p !== id)
-      localStorage.setItem(QUICK_ACCESS_KEY, JSON.stringify(next))
+      localStorage.setItem(storageKey, JSON.stringify(next))
       return next
     })
   }
@@ -698,7 +703,7 @@ export function AppSidebar({ user, entities: initialEntities, ...props }: AppSid
             liabilitiesValue={liabilitiesValue}
           />
         ) : (
-          <NavLinks entities={entities} />
+          <NavLinks entities={entities} userId={user.id} />
         )}
       </SidebarContent>
       <SidebarFooter>

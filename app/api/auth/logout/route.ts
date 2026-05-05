@@ -2,12 +2,14 @@ import { NextResponse } from 'next/server'
 
 export async function POST() {
   const response = NextResponse.json({ success: true })
-  response.cookies.set('authToken', '', {
+  const opts = {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    sameSite: 'lax' as const,
     path: '/',
     maxAge: 0,
-  })
+  }
+  response.cookies.set('authToken', '', opts)
+  response.cookies.set('adminAuthToken', '', opts)
   return response
 }
