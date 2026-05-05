@@ -20,7 +20,7 @@ export const metadata: Metadata = {
     template: "%s · Fundreporting.com",
   },
   description:
-    "FundReporting is the operating system for asset managers, family offices, and private funds. Run subscriptions, redemptions, distributions, NAV cycles, and investor reporting from one place — with a live cap table that always reflects the truth.",
+    "Fundreporting.com is the operating system for asset managers, family offices, and private funds. Run subscriptions, redemptions, distributions, NAV cycles, and investor reporting from one place — with a live cap table that always reflects the truth.",
   keywords: [
     "fund administration",
     "fund reporting",
@@ -35,20 +35,20 @@ export const metadata: Metadata = {
     "fund of funds",
     "investor reporting",
   ],
-  applicationName: "FundReporting",
-  authors: [{ name: "FundReporting" }],
+  applicationName: "Fundreporting.com",
+  authors: [{ name: "Fundreporting.com" }],
   metadataBase: new URL("https://www.fundreporting.com"),
   openGraph: {
     type: "website",
     url: "https://www.fundreporting.com",
-    siteName: "FundReporting",
-    title: "FundReporting — Operating system for private investment vehicles",
+    siteName: "Fundreporting.com",
+    title: "Fundreporting.com — Operating system for private investment vehicles",
     description:
       "Run subscriptions, redemptions, distributions, NAV cycles, and investor reporting from one place — with a live cap table that always reflects the truth.",
   },
   twitter: {
     card: "summary_large_image",
-    title: "FundReporting — Operating system for private investment vehicles",
+    title: "Fundreporting.com — Operating system for private investment vehicles",
     description:
       "Run subscriptions, redemptions, distributions, NAV cycles, and investor reporting from one place.",
   },
