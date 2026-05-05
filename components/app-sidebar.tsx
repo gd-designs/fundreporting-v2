@@ -7,11 +7,9 @@ import {
   Activity,
   ArrowLeftRight,
   BarChart3,
-  BookOpen,
   Briefcase,
   Building2,
   CheckSquare,
-  ChevronRight,
   CircleMinus,
   CirclePlus,
   FileText,
@@ -30,11 +28,6 @@ import {
   Users2,
   X,
 } from "lucide-react"
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible"
 
 import { NavUser } from "@/components/nav-user"
 import { EntitySwitcher } from "@/components/entity-switcher"
@@ -50,9 +43,6 @@ import {
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
   SidebarRail,
   SidebarSeparator,
 } from "@/components/ui/sidebar"
@@ -67,12 +57,6 @@ const NAV_ITEMS = [
   { title: "All Documents", url: "/documents", icon: FileText },
 ]
 
-const DOCS_ITEMS = [
-  { title: "Introduction", url: "https://docs.fundreporting.com/introduction" },
-  { title: "Get Started", url: "https://docs.fundreporting.com/get-started" },
-  { title: "Tutorials", url: "https://docs.fundreporting.com/tutorials" },
-  { title: "Changelog", url: "https://docs.fundreporting.com/changelog" },
-]
 
 const ENTITY_TYPE_ICONS: Record<string, React.ElementType> = {
   portfolio: Landmark,
@@ -487,35 +471,6 @@ function NavLinks({ entities, userId }: { entities: UnifiedEntity[]; userId: num
       </SidebarGroup>
 
       {/* Documentation */}
-      <SidebarGroup>
-        <SidebarMenu>
-          <Collapsible asChild defaultOpen={false} className="group/docs">
-            <SidebarMenuItem>
-              <CollapsibleTrigger asChild>
-                <SidebarMenuButton tooltip="Documentation">
-                  <BookOpen />
-                  <span>Documentation</span>
-                  <ChevronRight className="ml-auto transition-transform duration-200 group-data-[state=open]/docs:rotate-90" />
-                </SidebarMenuButton>
-              </CollapsibleTrigger>
-              <CollapsibleContent>
-                <SidebarMenuSub>
-                  {DOCS_ITEMS.map(doc => (
-                    <SidebarMenuSubItem key={doc.title}>
-                      <SidebarMenuSubButton asChild>
-                        <a href={doc.url} target="_blank" rel="noopener noreferrer">
-                          <span>{doc.title}</span>
-                        </a>
-                      </SidebarMenuSubButton>
-                    </SidebarMenuSubItem>
-                  ))}
-                </SidebarMenuSub>
-              </CollapsibleContent>
-            </SidebarMenuItem>
-          </Collapsible>
-        </SidebarMenu>
-      </SidebarGroup>
-
       {/* Quick Access */}
       <SidebarGroup>
         <SidebarGroupLabel className="flex items-center justify-between pr-1">
@@ -552,7 +507,7 @@ function NavLinks({ entities, userId }: { entities: UnifiedEntity[]; userId: num
 
         <SidebarMenu>
           {pinnedEntities.length === 0 ? (
-            <SidebarMenuItem>
+            <SidebarMenuItem className="group-data-[collapsible=icon]:hidden">
               <span className="px-3 text-xs text-muted-foreground">
                 Pin entities for quick access.
               </span>
